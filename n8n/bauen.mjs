@@ -83,7 +83,8 @@ const codeRundeB = KOPF + nurNoetig(['zwRundeB']) + '\n' +
   'return [{ json: { plenty: zwRundeB(plan, $input.all().map((i) => i.json)) } }];\n';
 
 const codeLogik = KOPF +
-  'const SEITE_HTML = ' + JSON.stringify(seite) + ';\n\n' +
+  '// Die Seite der ZW-Station, Zeile für Zeile (Quelle: frontend/zw-station.html)\n' +
+  'const SEITE_HTML = [\n' + seite.replace(/\n$/, '').split('\n').map((z) => '  ' + JSON.stringify(z) + ',').join('\n') + '\n].join(\'\\n\') + \'\\n\';\n\n' +
   logik + '\n' +
   '// ---------- Aufruf durch n8n ----------\n' +
   '// Die Daten aus plenty und Shopware gibt es nur, wenn „Daten nötig?“ den oberen Weg genommen hat.\n' +
