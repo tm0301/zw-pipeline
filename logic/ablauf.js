@@ -124,17 +124,33 @@ function speicherVorbereiten(speicher, beispieldaten) {
 }
 
 function geheimnis(e) {
-  const g = String(e.geheimSchluessel || '');
+  const g = String(e.geheimSchluessel || '').trim();
   if (g.length < 32) abbrechen(500, 'Einstellungen: geheimSchluessel fehlt oder ist zu kurz (mindestens 32 Zeichen).');
   return g;
 }
 
+// Nachsichtig lesen: einzelner Eintrag ohne [ ], mehrere Einträge ohne [ ], Leerzeichen.
+// Ist die Liste unbrauchbar, kommt eine klare Meldung statt „Passwort falsch“.
 function benutzerListe(e) {
   let liste = e.benutzer;
   if (typeof liste === 'string') {
-    try { liste = JSON.parse(liste || '[]'); } catch (err) { abbrechen(500, 'Einstellungen: benutzer ist kein gültiges JSON.'); }
+    const text = liste.trim();
+    if (!text || text === '[]') abbrechen(500, 'Einstellungen: benutzer ist leer. Einträge aus „Zugang einrichten“ einfügen, speichern und Publish.');
+    try {
+      liste = JSON.parse(text);
+    } catch (err) {
+      try { liste = JSON.parse('[' + text + ']'); } catch (err2) {
+        abbrechen(500, 'Einstellungen: benutzer ist kein gültiges JSON. Form: [{…},{…}] mit Komma zwischen den Einträgen.');
+      }
+    }
   }
-  return Array.isArray(liste) ? liste : [];
+  if (liste && !Array.isArray(liste) && typeof liste === 'object') liste = [liste];
+  if (!Array.isArray(liste) || !liste.length) abbrechen(500, 'Einstellungen: benutzer ist leer.');
+  const kaputt = liste.filter((b) => !b || !b.benutzer || !/^pbkdf2-sha256\$\d+\$[0-9a-f]+\$[0-9a-f]{64}$/i.test(String(b.hash || '').trim()));
+  if (kaputt.length) {
+    abbrechen(500, 'Einstellungen: ' + kaputt.length + ' Eintrag/Einträge in benutzer ohne gültigen Benutzernamen oder Hash. Eintrag neu erzeugen und komplett einfügen.');
+  }
+  return liste.map((b) => Object.assign({}, b, { benutzer: String(b.benutzer).trim(), hash: String(b.hash).trim() }));
 }
 
 function protokollieren(speicher, jetzt, eintrag) {

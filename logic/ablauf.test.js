@@ -239,3 +239,31 @@ test('nach dem Mailversand: Fehler landen in Speicher und Antwort', () => {
   assert.equal(k.speicher.positionen['50101-1'].status, 'wartet');
   assert.equal(neu.mails, undefined, 'Mails gehen nicht an die Seite');
 });
+
+test('Benutzerliste wird nachsichtig gelesen', () => {
+  const { k, rufe } = aufbau();
+  const liste = JSON.parse(k.einstellungen.benutzer);
+  const login = () => rufe('anmelden', { body: { benutzer: 'lager1', passwort: 'Passwort-Lager1' } });
+  k.einstellungen.benutzer = ' ' + JSON.stringify(liste[0]) + ' '; // ein Eintrag ohne [ ]
+  assert.equal(login().status, 200);
+  k.einstellungen.benutzer = JSON.stringify(liste[1]) + ',' + JSON.stringify(liste[0]); // mehrere ohne [ ]
+  assert.equal(login().status, 200);
+  k.einstellungen.benutzer = liste; // als echtes Array (Typ „Array“ im Baustein)
+  assert.equal(login().status, 200);
+});
+
+test('kaputte Benutzerliste gibt eine klare Meldung statt „Passwort falsch“', () => {
+  const { k, rufe } = aufbau();
+  const login = () => rufe('anmelden', { body: { benutzer: 'lager1', passwort: 'Passwort-Lager1' } });
+  for (const [wert, muster] of [
+    ['[]', /benutzer ist leer/],
+    ['', /benutzer ist leer/],
+    ['[{"benutzer":"lager1"', /kein gültiges JSON/],
+    ['[{"benutzer":"lager1","hash":"pbkdf2-sha256$10000$ab$cd"}]', /ohne gültigen Benutzernamen oder Hash/],
+  ]) {
+    k.einstellungen.benutzer = wert;
+    const r = login();
+    assert.equal(r.status, 500, wert);
+    assert.match(r.daten.fehler, muster);
+  }
+});
