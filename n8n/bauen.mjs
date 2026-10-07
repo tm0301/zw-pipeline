@@ -61,8 +61,11 @@ const seite = lies('frontend/zw-station.html');
 if (/`|\$\{/.test(seite)) throw new Error('frontend/zw-station.html darf keine Backticks und kein ${ enthalten');
 const version = createHash('sha256').update(logik + seite).digest('hex').slice(0, 10);
 
-const KOPF = '// ZW-Pipeline · erzeugt von n8n/bauen.mjs · Version ' + version + '\n' +
-  '// Nicht hier ändern: Änderungen im Repo machen und neu bauen.\n\n';
+// Kopf jedes Code-Bausteins. Die Version ist eine Prüfsumme über den Inhalt dieses Bausteins,
+// so ändert sich der Kopf nur, wenn sich der Baustein wirklich ändert.
+const mitKopf = (inhalt) => '// ZW-Pipeline · erzeugt von n8n/bauen.mjs · Version ' +
+  createHash('sha256').update(inhalt).digest('hex').slice(0, 10) + '\n' +
+  '// Nicht hier ändern: Änderungen im Repo machen und neu bauen.\n\n' + inhalt;
 
 // Zugänge, die es in n8n schon gibt (nur lesend). Name und ID aus n8n, keine Geheimnisse.
 const ZUGANG_PLENTY = { plentymarketsApi: { id: 'mF2triRKwGA42wpL', name: 'PlentyONE Tobi - read all' } };
@@ -71,20 +74,20 @@ const SHOPWARE_SUCHE = 'https://mykitchens.de/api/search/product';
 
 const ANFRAGE = '{ url: anfrage.webhookUrl, query: anfrage.query, body: anfrage.body, headers: anfrage.headers }';
 
-const codeVorbereiten = KOPF + nurNoetig(['zwVorbereiten']) + '\n' +
+const codeVorbereiten = mitKopf(nurNoetig(['zwVorbereiten']) + '\n' +
   '// ---------- Aufruf durch n8n: Welche Daten braucht diese Anfrage? ----------\n' +
   'const anfrage = $input.first().json;\n' +
   'const plan = zwVorbereiten(' + ANFRAGE + ', {\n' +
   '  einstellungen: anfrage.einstellungen || {}, speicher: $getWorkflowStaticData(\'global\'), jetzt: Date.now(),\n' +
   '});\n' +
-  'return [{ json: plan }];\n';
+  'return [{ json: plan }];\n');
 
-const codeRundeB = KOPF + nurNoetig(['zwRundeB']) + '\n' +
+const codeRundeB = mitKopf(nurNoetig(['zwRundeB']) + '\n' +
   '// ---------- Aufruf durch n8n: Abfragen für plenty Runde B ----------\n' +
   'const plan = $(\'Vorbereiten\').first().json.plan;\n' +
-  'return [{ json: { plenty: zwRundeB(plan, $input.all().map((i) => i.json)) } }];\n';
+  'return [{ json: { plenty: zwRundeB(plan, $input.all().map((i) => i.json)) } }];\n');
 
-const codeLogik = KOPF +
+const codeLogik = mitKopf(
   '// Die Seite der ZW-Station als Rohtext (Quelle: frontend/zw-station.html)\n' +
   'const SEITE_HTML = String.raw`' + seite + '`;\n\n' +
   logik + '\n' +
@@ -104,14 +107,14 @@ const codeLogik = KOPF +
   '  seiteHtml: SEITE_HTML, daten: geholteDaten(),\n' +
   '  eigenerCode: () => { try { return $(\'ZW-Logik\').params.jsCode; } catch (err) { return null; } },\n' +
   '});\n' +
-  'return [{ json: antwort }];\n';
+  'return [{ json: antwort }];\n');
 
-const codeMailsAufteilen = KOPF +
+const codeMailsAufteilen = mitKopf(
   '// Eine Mail pro Artikel, der auf Freigabe wartet\n' +
   'const mails = $input.first().json.mails || [];\n' +
-  'return mails.map((m) => ({ json: m }));\n';
+  'return mails.map((m) => ({ json: m }));\n');
 
-const codeMailergebnis = KOPF + nurNoetig(['zwNachMailversand']) + '\n' +
+const codeMailergebnis = mitKopf(nurNoetig(['zwNachMailversand']) + '\n' +
   '// Mails, die nicht rausgingen, als Fehler vermerken (das Lager kann neu anlegen). Danach antwortet „Antwort senden“.\n' +
   'const antwort = zwNachMailversand(\n' +
   '  $(\'ZW-Logik\').first().json,\n' +
@@ -119,7 +122,7 @@ const codeMailergebnis = KOPF + nurNoetig(['zwNachMailversand']) + '\n' +
   '  $getWorkflowStaticData(\'global\'),\n' +
   '  Date.now(),\n' +
   ');\n' +
-  'return [{ json: antwort }];\n';
+  'return [{ json: antwort }];\n');
 
 // Feste IDs, damit ein erneuter Import dieselben Bausteine ergibt
 const id = (name) => {
