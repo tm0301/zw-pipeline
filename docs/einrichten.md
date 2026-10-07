@@ -78,7 +78,9 @@ Eine Retoure öffnen und pro Artikel einen Zustand wählen: Die Vorschau rechnet
 - **Preis:** Die Seite zeigt eine Empfehlung nach der Preisregel. Das Lager darf den Preis ändern. In der Freigabe-Mail stehen dann beide Preise.
 - Anlegen → eine Freigabe-Mail pro Artikel → Freigeben oder Ablehnen auf einer Bestätigungsseite.
 - **Nicht verkaufbar:** Info-Mail mit Grund ans Büro. Sind alle Positionen entschieden, geht die Retoure auf 9.1.3 (Reklamieren), sonst auf 9.3.
-- Die Vorschau zeigt, was der ZW-Artikel in Shopware nicht vom Original übernimmt: Sale-Kategorien, Tag „flash sale“, Produktoptionen I–III.
+- Rabatt-Positionen in der Retoure (z. B. „2 % Rabatt bei Vorkasse per Überweisung“, „Summer Sale - 75 EUR Rabatt“) stehen nicht zur Auswahl.
+  Erkannt am negativen Preis oder an „Rabatt“ im Namen. Die Seite nennt sie nur als „ausgeblendet“.
+- Die Vorschau zeigt, welche Sale-Kategorien und Sale-Tags der ZW-Artikel in Shopware nicht vom Original übernimmt.
 - Nachgestellt: neue Varianten-ID (`SIM-1`, `SIM-2` …), Bestand +1, Kommentar in der Retoure, Status 9.3. In plenty und Shopware ändert sich nichts.
 - Tab **ZW-Liste** (ersetzt die Excel-Liste): alle freigegebenen ZW-Artikel, Knopf **Bestand gebucht**, Suche, Filter, CSV-Export. Darunter das Protokoll.
 - Fehler (z. B. Original fehlt in Shopware, Artikel ohne EAN, Mail nicht gesendet) als Kommentar. Die Position kann neu angelegt werden.

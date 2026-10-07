@@ -26,6 +26,8 @@ const AUFTRAEGE = {
     { id: 5101, typeId: 1, itemVariationId: 772161, orderItemName: 'Bosch Kochfeld', quantity: 1 },
     { id: 5102, typeId: 1, itemVariationId: 772162, orderItemName: 'Siemens Spüler', quantity: 1 },
     { id: 5103, typeId: 1, itemVariationId: 772163, orderItemName: 'Teil ohne EAN', quantity: 1 },
+    { id: 5104, typeId: 1, itemVariationId: 787119, orderItemName: '2% Rabatt bei Vorkasse per Überweisung', quantity: 1, amounts: [{ priceGross: -55.19 }] },
+    { id: 5105, typeId: 1, itemVariationId: 787573, orderItemName: 'Summer Sale - 75 EUR Rabatt', quantity: 1, amounts: [{ priceGross: -75 }] },
   ], 'MK91002'),
 };
 
@@ -45,7 +47,7 @@ const SHOPWARE = [
   {
     id: 'a1', productNumber: '772160', name: 'Miele H 2861-1 B 125 Edition Einbau-Backofen Edelstahl/CleanSteel', ean: '4002516769965',
     price: [{ currencyId: 'x', gross: 1149, net: 965.55, listPrice: { gross: 1299 } }], purchasePrices: [{ gross: 644.11 }],
-    customFields: { custom_price_minprice: 865, dvsn_product_option_product_option_1: 'abc' },
+    customFields: { custom_price_minprice: 865 },
     categoryIds: ['kat-backofen', '019f13061667716a9525667c2acb4d56'], tagIds: ['019c75c6b03378f4bb6bb46085c38bdc'],
   },
   {
@@ -518,7 +520,7 @@ test('Lager ändert den Preis: Empfehlung bleibt sichtbar, Warnungen neu berechn
   const v = rufe('vorschau', { schluessel: s, body: { entscheidungen: [{ positionId: '5001', zustand: 'Gut' }] } }).daten.vorschau[0];
   assert.equal(v.empfehlung, 777.99);
   assert.equal(v.einkaufspreis, 644.11);
-  assert.deepEqual(v.nichtUebernehmen, ['Kategorie Summer Sale', 'Tag flash sale', 'Produkt Option I']);
+  assert.deepEqual(v.nichtUebernehmen, ['Kategorie Summer Sale', 'Tag flash sale']);
 
   const a = rufe('anlegen', { schluessel: s, body: { entscheidungen: [{ positionId: '5001', zustand: 'Gut', grund: 'Kratzer', preis: '599,00' }] } });
   const st = a.daten.ergebnisse[0];
@@ -556,4 +558,18 @@ test('ohne bueroAn geht die Info an freigabeAn, Mailfehler bei der Info ändert 
   assert.equal(neu.ergebnisse[0].status, 'nicht_verkaufbar');
   assert.match(neu.ergebnisse[0].hinweis, /Büro nicht gesendet/);
   assert.equal(k.speicher.retourenFertig['241881'].status, '9.1.3');
+});
+
+test('Rabatt-Positionen (negativer Preis) stehen nicht zur Auswahl', () => {
+  const { rufe, anmelden } = aufbau();
+  const s = anmelden('lager1', 'Passwort-Lager1');
+  const liste = rufe('retouren', { schluessel: s }).daten.retouren;
+  assert.equal(liste.find((r) => r.id === '241900').anzahl, 3);
+  const r = rufe('retoure', { schluessel: s, query: { nr: '241900' } }).daten.retoure;
+  assert.deepEqual(r.positionen.map((p) => p.positionId), ['5101', '5102', '5103']);
+  assert.deepEqual(r.ausgeblendet, [
+    { name: '2% Rabatt bei Vorkasse per Überweisung', preis: -55.19 }, { name: 'Summer Sale - 75 EUR Rabatt', preis: -75 },
+  ]);
+  const a = rufe('anlegen', { schluessel: s, body: { entscheidungen: [{ positionId: '5104', zustand: 'Kein ZW' }] } });
+  assert.match(a.daten.ergebnisse[0].meldung, /Position unbekannt/);
 });

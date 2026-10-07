@@ -8,8 +8,7 @@ const LEER_SHOPWARE = { limit: 1, filter: [{ type: 'equals', field: 'productNumb
 const SHOPWARE_FELDER = ['id', 'productNumber', 'name', 'ean', 'active', 'stock', 'isCloseout', 'price', 'purchasePrices', 'customFields', 'categoryIds', 'tagIds'];
 const POSITION_VERSANDKOSTEN = 6;
 
-// Was der ZW-Artikel in Shopware nicht vom Original übernehmen darf (Tobias, 07.10.2026):
-// keine Sale-Aktionen und keine wählbaren Produktoptionen wie „2 % Rabatt bei Vorkasse per Überweisung“.
+// Sale-Kategorien und -Tags des Originals soll der ZW-Artikel in Shopware nicht bekommen (Annahme, Tobias bestätigt noch).
 // IDs per API gelesen am 07.10.2026. Neue Sale-Unterkategorien müssen hier ergänzt werden (Phase 6: dynamisch laden).
 const SALE_KATEGORIEN = {
   '01920f7ac35c752a8113760414000306': 'Sale',
@@ -21,11 +20,6 @@ const SALE_KATEGORIEN = {
   '01a037ed9aff7e0997523b5585f46a51': 'Autumn Sale',
 };
 const SALE_TAGS = { '019c75c6b03378f4bb6bb46085c38bdc': 'flash sale' };
-const PRODUKTOPTIONEN = {
-  dvsn_product_option_product_option_1: 'Produkt Option I',
-  dvsn_product_option_product_option_2: 'Produkt Option II',
-  dvsn_product_option_product_option_3: 'Produkt Option III',
-};
 const AUFTRAG_EIGENSCHAFT_EXTERNE_NR = 7; // Shop-Auftragsnummer, z. B. MK91001
 
 // Status wie in plenty angezeigt („9.1.1“) in die interne Zahl umrechnen (9.11).
@@ -83,9 +77,22 @@ function eintraege(antwort) {
   return (antwort && Array.isArray(antwort.entries)) ? antwort.entries : [];
 }
 
+// Rabatte wie „2 % Rabatt bei Vorkasse per Überweisung“ oder „Summer Sale - 75 EUR Rabatt“ stehen in plenty
+// als normale Artikel-Positionen mit negativem Preis in der Retoure. Sie dürfen nicht zur Auswahl stehen.
+function istRabatt(p) {
+  const preis = ((p.amounts || [])[0] || {}).priceGross;
+  return (typeof preis === 'number' && preis < 0) || /rabatt/i.test(String(p.orderItemName || ''));
+}
+
+function rabattPositionen(auftrag) {
+  return (auftrag.orderItems || [])
+    .filter((p) => Number(p.itemVariationId) > 0 && Number(p.typeId) !== POSITION_VERSANDKOSTEN && istRabatt(p))
+    .map((p) => ({ name: p.orderItemName || '', preis: zahl(((p.amounts || [])[0] || {}).priceGross) }));
+}
+
 function artikelPositionen(auftrag) {
   return (auftrag.orderItems || [])
-    .filter((p) => Number(p.itemVariationId) > 0 && Number(p.typeId) !== POSITION_VERSANDKOSTEN)
+    .filter((p) => Number(p.itemVariationId) > 0 && Number(p.typeId) !== POSITION_VERSANDKOSTEN && !istRabatt(p))
     .map((p) => ({ positionId: String(p.id), varianteId: String(p.itemVariationId), name: p.orderItemName || '', menge: Number(p.quantity) || 1 }));
 }
 
@@ -136,13 +143,11 @@ function shopwareProdukt(p) {
   };
 }
 
-// Sale-Kategorien, Sale-Tags und Produktoptionen des Originals, die der ZW-Artikel nicht bekommt.
+// Sale-Kategorien und Sale-Tags des Originals, die der ZW-Artikel nicht bekommt.
 function nichtUebernehmen(p) {
-  const cf = p.customFields || {};
   return []
     .concat((p.categoryIds || []).filter((id) => SALE_KATEGORIEN[id]).map((id) => 'Kategorie ' + SALE_KATEGORIEN[id]))
-    .concat((p.tagIds || []).filter((id) => SALE_TAGS[id]).map((id) => 'Tag ' + SALE_TAGS[id]))
-    .concat(Object.keys(PRODUKTOPTIONEN).filter((f) => cf[f]).map((f) => PRODUKTOPTIONEN[f]));
+    .concat((p.tagIds || []).filter((id) => SALE_TAGS[id]).map((id) => 'Tag ' + SALE_TAGS[id]));
 }
 
 function shopwareNachNummer(antwort) {
@@ -156,7 +161,7 @@ if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     LEER_PLENTY, LEER_SHOPWARE, plentyStatus, retourenNummer,
     anfrageRetourenListe, anfrageRetoure, anfrageVarianten, anfrageBarcode, shopwareSuche,
-    plentyFehler, eintraege, artikelPositionen, shopAuftrag, eanAusVariante, textOhneHtml, shopwareProdukt, shopwareNachNummer,
-    SALE_KATEGORIEN, SALE_TAGS, PRODUKTOPTIONEN, nichtUebernehmen,
+    plentyFehler, eintraege, artikelPositionen, rabattPositionen, istRabatt, shopAuftrag, eanAusVariante, textOhneHtml, shopwareProdukt, shopwareNachNummer,
+    SALE_KATEGORIEN, SALE_TAGS, nichtUebernehmen,
   };
 }

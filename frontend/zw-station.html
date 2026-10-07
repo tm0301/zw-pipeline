@@ -393,7 +393,8 @@ td .gebucht { color: var(--ok); font-weight: 600; }
     // Beim Neuzeichnen das Feld behalten, in dem gerade getippt wird
     var aktiv = document.activeElement, fokus = aktiv && aktiv.dataset ? (aktiv.dataset.grund ? 'grund' : (aktiv.dataset.preis ? 'preis' : null)) : null;
     var fokusPos = fokus ? aktiv.dataset[fokus] : null, auswahlStart = fokus ? aktiv.selectionStart : null;
-    $('pos-list').innerHTML = r.positionen.map(positionHtml).join('');
+    $('pos-list').innerHTML = r.positionen.map(positionHtml).join('') + ((r.ausgeblendet || []).length
+      ? '<p class="hint">Ausgeblendet, weil kein Artikel: ' + r.ausgeblendet.map(function (x) { return esc(x.name) + (x.preis != null ? ' (' + eur.format(x.preis) + ')' : ''); }).join(', ') + '</p>' : '');
     if (fokus) {
       var neu = $('pos-list').querySelector('[data-' + fokus + '="' + fokusPos + '"]');
       if (neu) { neu.focus(); try { neu.setSelectionRange(auswahlStart, auswahlStart); } catch (e) {} }

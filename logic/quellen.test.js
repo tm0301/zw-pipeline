@@ -24,6 +24,13 @@ test('Abfragen sind nur lesend', () => {
   assert.equal(q.shopwareSuche([]), q.LEER_SHOPWARE);
 });
 
+test('Rabatte erkennen: negativer Preis oder „Rabatt“ im Namen', () => {
+  assert.equal(q.istRabatt({ orderItemName: '2% Rabatt bei Vorkasse per Überweisung', amounts: [{ priceGross: -55.19 }] }), true);
+  assert.equal(q.istRabatt({ orderItemName: 'Gutschrift', amounts: [{ priceGross: -10 }] }), true);
+  assert.equal(q.istRabatt({ orderItemName: 'Summer Sale - 75 EUR Rabatt' }), true);
+  assert.equal(q.istRabatt({ orderItemName: 'Miele Backofen', amounts: [{ priceGross: 2759.5 }] }), false);
+});
+
 test('Positionen ohne Versandkosten', () => {
   const p = q.artikelPositionen({ orderItems: [
     { id: 1, typeId: 1, itemVariationId: 5, orderItemName: 'A', quantity: 2 },

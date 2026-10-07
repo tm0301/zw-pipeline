@@ -17,7 +17,7 @@ const {
 const { passwortPruefen, signatur, schluesselAusstellen, schluesselPruefen, gleich, sha256, utf8, bytesZuHex } = require('./anmeldung.js');
 const {
   LEER_PLENTY, LEER_SHOPWARE, retourenNummer, anfrageRetourenListe, anfrageRetoure, anfrageVarianten, anfrageBarcode, shopwareSuche,
-  plentyFehler, eintraege, artikelPositionen, shopAuftrag, eanAusVariante, textOhneHtml, shopwareNachNummer,
+  plentyFehler, eintraege, artikelPositionen, rabattPositionen, shopAuftrag, eanAusVariante, textOhneHtml, shopwareNachNummer,
 } = require('./quellen.js');
 // NUR-NODE-ENDE
 
@@ -377,6 +377,7 @@ function retoureDetail(speicher, nr, d, jetzt) {
     id, shopAuftrag: shopAuftrag(auftrag), datum: String(auftrag.createdAt || '').slice(0, 10), status: auftrag.statusName || String(auftrag.statusId),
     probelaufFertig: !!speicher.retourenFertig[id], probelaufStatus: fertigStatus(speicher, id),
     plentyKommentare: eintraege(d.a[1]).map((c) => ({ zeit: c.createdAt, text: textOhneHtml(c.text) })).filter((c) => c.text),
+    ausgeblendet: rabattPositionen(auftrag),
     kommentare: speicher.kommentare[id] || [],
     positionen: positionen.map((p) => Object.assign({
       positionId: p.positionId, varianteId: p.varianteId, ean: p.ean, modell: p.modell, name: p.name, menge: p.menge, bild: null,
