@@ -26,6 +26,10 @@ const MAX_FEHLVERSUCHE = 5;
 const SPERRE_MINUTEN = 15;
 const MAX_ZWISCHENSPEICHER_RETOUREN = 300;
 const DATEN_AKTIONEN = ['retouren', 'retoure', 'vorschau', 'anlegen'];
+// Bilder zum Grund: höchstens 3 pro Position. Die Seite verkleinert sie vorher (JPEG, etwa 300 KB).
+const BILDER_MAX = 3;
+const BILD_MAX_ZEICHEN = 2500000;
+const BILD_TYPEN = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
 
 // ---------- Einstieg ----------
 
@@ -472,7 +476,27 @@ function entscheidungenLesen(body) {
     zustand: String(x.zustand || ''),
     grund: String(x.grund || '').replace(/\s+/g, ' ').trim().slice(0, ZW_GRUND_MAX),
     preis: x.preis,
+    bilder: bilderLesen(x.bilder, String(x.positionId || '')),
   }));
+}
+
+// Bilder kommen als Data-URL (data:image/jpeg;base64,…). Sie gehen nur als Anhang in die Mails
+// und werden nicht im Speicher des Workflows abgelegt.
+function bilderLesen(liste, positionId) {
+  if (liste === undefined || liste === null) return [];
+  if (!Array.isArray(liste)) abbrechen(400, 'Position ' + positionId + ': Bilder ungültig.');
+  if (liste.length > BILDER_MAX) abbrechen(400, 'Position ' + positionId + ': höchstens ' + BILDER_MAX + ' Bilder.');
+  return liste.map((b, i) => {
+    const m = /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/]+={0,2})$/.exec(String((b && b.daten) || ''));
+    if (!m) abbrechen(400, 'Position ' + positionId + ': Bild ' + (i + 1) + ' ist kein JPEG, PNG oder WebP.');
+    if (m[2].length > BILD_MAX_ZEICHEN) abbrechen(400, 'Position ' + positionId + ': Bild ' + (i + 1) + ' ist zu groß.');
+    const name = String((b && b.name) || '').replace(/\.[^.]*$/, '').replace(/[^A-Za-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'bild';
+    return { name: 'retoure-pos' + positionId + '-' + (i + 1) + '-' + name + '.' + BILD_TYPEN[m[1]], mimeType: m[1], daten: m[2] };
+  });
+}
+
+function bilderZeile(anzahl) {
+  return anzahl ? anzahl + (anzahl === 1 ? ' Bild' : ' Bilder') + ' im Anhang der Mail' : 'keine';
 }
 
 function vorschauListe(speicher, body, e, quellen) {
@@ -512,7 +536,7 @@ function anlegen(speicher, body, e, person, jetzt, url, quellen) {
     }
     const v = vorschauPosition(speicher, x.positionId, x.zustand, e, quellen);
     const pos = speicher.cache.positionen[x.positionId];
-    const gemeinsam = { zustand: x.zustand, grund: x.grund, von: person.benutzer, retoureId: pos ? pos.retoureId : null, aktualisiert: new Date(jetzt).toISOString() };
+    const gemeinsam = { zustand: x.zustand, grund: x.grund, bilder: x.bilder.length, von: person.benutzer, retoureId: pos ? pos.retoureId : null, aktualisiert: new Date(jetzt).toISOString() };
 
     if (v.fehler) {
       if (!pos) { ergebnisse.push({ positionId: x.positionId, status: 'fehler', meldung: v.fehler }); continue; }
@@ -532,18 +556,19 @@ function anlegen(speicher, body, e, person, jetzt, url, quellen) {
       kommentarSim(speicher, pos.retoureId, gemeinsam.aktualisiert, kommentar + ' (' + x.positionId + ')');
       protokollieren(speicher, jetzt, { benutzer: person.benutzer, aktion: 'entscheidung', retoureId: pos.retoureId, positionId: x.positionId, zustand: x.zustand, ergebnis: status, meldung: x.grund || undefined });
       retoureAbschliessenWennFertig(speicher, pos.retoureId, jetzt, e);
-      if (status === 'nicht_verkaufbar') mails.push(bueroMail(speicher, pos, x, person, e, bueroAn));
+      if (status === 'nicht_verkaufbar') mails.push(Object.assign(bueroMail(speicher, pos, x, person, e, bueroAn), { anhaenge: x.bilder }));
       ergebnisse.push(Object.assign({ positionId: x.positionId }, st));
       continue;
     }
 
     v.grund = x.grund;
+    v.bilder = x.bilder.length;
     preisSetzen(v, x.lagerPreis);
     const versuch = (bisher.versuch || 0) + 1;
     const st = Object.assign({ status: 'wartet', versuch, vorschau: v }, gemeinsam);
     speicher.positionen[x.positionId] = st;
     protokollieren(speicher, jetzt, { benutzer: person.benutzer, aktion: 'freigabe-angefragt', retoureId: pos.retoureId, positionId: x.positionId, zustand: x.zustand, preis: v.preis, ergebnis: 'wartet' });
-    mails.push(freigabeMail(speicher, v, person, versuch, basisUrl, g, e, freigabeAn));
+    mails.push(Object.assign(freigabeMail(speicher, v, person, versuch, basisUrl, g, e, freigabeAn), { anhaenge: x.bilder }));
     ergebnisse.push(Object.assign({ positionId: x.positionId }, st));
   }
   const antwort = json(200, { ok: true, ergebnisse });
@@ -583,6 +608,7 @@ function bueroMail(speicher, pos, x, person, e, an) {
     ['Original', 'Variante ' + pos.varianteId + (pos.ean ? ' · EAN ' + pos.ean : '')],
     ['Entscheidung', 'Nicht verkaufbar'],
     ['Grund', x.grund],
+    ['Bilder', bilderZeile(x.bilder.length)],
     ['Gemeldet von', person.name],
   ];
   return {
@@ -604,6 +630,7 @@ function vorschauZeilen(speicher, v) {
     ['Original', 'Variante ' + v.originalVarianteId + ' · EAN ' + v.ean],
     ['Zustand', v.zustand],
     ['Grund', v.grund || '–'],
+    ['Bilder', bilderZeile(v.bilder || 0)],
     ['Barcode', v.barcode],
     ['Preis', euro(v.preis) + (v.preisVomLager ? ' (vom Lager geändert, Empfehlung ' + euro(v.empfehlung) + ')' : ' (Empfehlung)') + ', Streichpreis ' + euro(v.streichpreis)],
     ['Preisregel', v.fall === 'normal' ? 'Mindestpreis ' + euro(v.mindestpreis) + ' − ' + v.abschlag + ' %' : (v.fall === 'a' ? 'Mindestpreis erreicht' : 'Mindestpreis leer') + ': jetziger Preis − ' + v.abschlag + ' %'],
@@ -686,7 +713,7 @@ function freigabeEntscheiden(body, e, speicher, jetzt) {
   kommentarSim(speicher, retoureId, zeit, kommentar);
   speicher.zwListe.push({
     id: 'Z' + (sim.naechsteZeile++), datum: zeit.slice(0, 10), retoureId, originalVarianteId: v.originalVarianteId,
-    zwVarianteId: varianteId, barcode: v.barcode, name: v.name, zustand: v.zustand, grund: v.grund || '',
+    zwVarianteId: varianteId, barcode: v.barcode, name: v.name, zustand: v.zustand, grund: v.grund || '', bilder: v.bilder || 0,
     preis: v.preis, empfehlung: v.empfehlung, preisVomLager: !!v.preisVomLager, streichpreis: v.streichpreis,
     neuOderPlus1: plus1 ? '+1' : 'neu', freigegebenVon: von, probelauf: true, bestandGebucht: false, gebuchtVon: null, gebuchtAm: null,
   });

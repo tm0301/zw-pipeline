@@ -8,7 +8,7 @@ const LEER_SHOPWARE = { limit: 1, filter: [{ type: 'equals', field: 'productNumb
 const SHOPWARE_FELDER = ['id', 'productNumber', 'name', 'ean', 'active', 'stock', 'isCloseout', 'price', 'purchasePrices', 'customFields', 'categoryIds', 'tagIds'];
 const POSITION_VERSANDKOSTEN = 6;
 
-// Sale-Kategorien und -Tags des Originals soll der ZW-Artikel in Shopware nicht bekommen (Annahme, Tobias bestätigt noch).
+// Sale-Kategorien und -Tags des Originals bekommt der ZW-Artikel in Shopware nicht (von Tobias bestätigt am 07.10.2026).
 // IDs per API gelesen am 07.10.2026. Neue Sale-Unterkategorien müssen hier ergänzt werden (Phase 6: dynamisch laden).
 const SALE_KATEGORIEN = {
   '01920f7ac35c752a8113760414000306': 'Sale',

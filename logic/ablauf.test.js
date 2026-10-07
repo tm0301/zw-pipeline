@@ -573,3 +573,52 @@ test('Rabatt-Positionen (negativer Preis) stehen nicht zur Auswahl', () => {
   const a = rufe('anlegen', { schluessel: s, body: { entscheidungen: [{ positionId: '5104', zustand: 'Kein ZW' }] } });
   assert.match(a.daten.ergebnisse[0].meldung, /Position unbekannt/);
 });
+
+test('Bilder zum Grund: als Anhang in die Mails, nicht im Speicher', () => {
+  const { k, rufe, anmelden, link } = aufbau();
+  const s = anmelden('lager1', 'Passwort-Lager1');
+  rufe('retoure', { schluessel: s, query: { nr: '241900' } });
+  const jpg = 'data:image/jpeg;base64,' + Buffer.from('bild-eins').toString('base64');
+  const png = 'data:image/png;base64,' + Buffer.from('bild-zwei').toString('base64');
+  const a = rufe('anlegen', { schluessel: s, body: { entscheidungen: [
+    { positionId: '5102', zustand: 'Gut', grund: 'Delle', bilder: [{ name: 'IMG 0001.HEIC.jpg', daten: jpg }, { name: '', daten: png }] },
+    { positionId: '5101', zustand: 'Nicht verkaufbar', grund: 'Glas gesprungen', bilder: [{ name: 'riss.jpg', daten: jpg }] },
+  ] } });
+  assert.equal(a.status, 200);
+  const freigabe = a.mails.find((m) => m.positionId === '5102');
+  const buero = a.mails.find((m) => m.positionId === '5101');
+  assert.deepEqual(freigabe.anhaenge.map((x) => [x.name, x.mimeType]), [
+    ['retoure-pos5102-1-IMG-0001-HEIC.jpg', 'image/jpeg'], ['retoure-pos5102-2-bild.png', 'image/png'],
+  ]);
+  assert.equal(Buffer.from(freigabe.anhaenge[0].daten, 'base64').toString(), 'bild-eins');
+  assert.match(freigabe.html, /2 Bilder im Anhang/);
+  assert.equal(buero.anhaenge.length, 1);
+  assert.match(buero.html, /1 Bild im Anhang/);
+  assert.deepEqual(a.daten.ergebnisse.map((e) => e.bilder), [2, 1]);
+  assert.ok(!JSON.stringify(k.speicher).includes(freigabe.anhaenge[0].daten), 'Bilddaten liegen nicht im Speicher');
+  assert.ok(!a.body.includes(freigabe.anhaenge[0].daten), 'Bilddaten gehen nicht zurück an die Seite');
+  // Freigabe-Seite und ZW-Liste nennen die Anzahl
+  assert.match(rufe('freigabe', { query: link(freigabe) }).body, /2 Bilder/);
+  rufe('freigabe-entscheiden', { body: Object.assign({}, link(freigabe), { entscheidung: 'freigeben' }) });
+  assert.equal(rufe('zw-liste', { schluessel: s }).daten.zwListe[0].bilder, 2);
+});
+
+test('ungültige Bilder werden abgewiesen, ohne etwas anzulegen', () => {
+  const { k, rufe, anmelden } = aufbau();
+  const s = anmelden('lager1', 'Passwort-Lager1');
+  rufe('retoure', { schluessel: s, query: { nr: '241881' } });
+  const jpg = { name: 'a.jpg', daten: 'data:image/jpeg;base64,QUJD' };
+  const falsch = [
+    [jpg, jpg, jpg, jpg],
+    [{ name: 'x.svg', daten: 'data:image/svg+xml;base64,PHN2Zz4=' }],
+    [{ name: 'x.jpg', daten: 'data:image/jpeg;base64,<script>' }],
+    [{ name: 'gross.jpg', daten: 'data:image/jpeg;base64,' + 'A'.repeat(2500004) }],
+    'kein-array',
+  ];
+  for (const bilder of falsch) {
+    const r = rufe('anlegen', { schluessel: s, body: { entscheidungen: [{ positionId: '5001', zustand: 'Gut', grund: 'x', bilder }] } });
+    assert.equal(r.status, 400, JSON.stringify(bilder).slice(0, 60));
+    assert.match(r.daten.fehler, /Bild/);
+  }
+  assert.deepEqual(k.speicher.positionen, {});
+});

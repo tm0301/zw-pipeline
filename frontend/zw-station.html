@@ -109,6 +109,14 @@ td .gebucht { color: var(--ok); font-weight: 600; }
 .eingabe .fehlt { border-color: var(--err); }
 .eingabe .pflicht { color: var(--err); }
 .preiswarn { display: flex; flex-direction: column; gap: 4px; }
+.eingabe-bilder { display: flex; flex-direction: column; gap: 6px; }
+.bilder { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.bilder figure { margin: 0; position: relative; width: 84px; aspect-ratio: 1; border-radius: 10px; overflow: hidden; border: 1px solid var(--line); background: var(--surface); }
+.bilder figure img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.bilder figure button { position: absolute; top: 4px; right: 4px; width: 30px; height: 30px; border-radius: 50%; border: 0; background: rgba(0,0,0,.65); color: #fff; font-size: 1rem; line-height: 1; cursor: pointer; }
+.bilder .datei { position: relative; display: inline-flex; flex-direction: row; align-items: center; justify-content: center; min-height: 44px; padding: 8px 14px; border-radius: 10px; border: 2px dashed var(--line); color: var(--fg); font-weight: 600; cursor: pointer; }
+.bilder .datei input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.bilder .datei:focus-within { outline: 3px solid var(--accent); outline-offset: 2px; }
 .preiswarn span { color: var(--warn); background: var(--warn-bg); padding: 6px 10px; border-radius: 8px; font-size: .9rem; }
 .setup { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
 [hidden] { display: none !important; }
@@ -236,13 +244,17 @@ td .gebucht { color: var(--ok); font-weight: 600; }
   // Bei diesen Entscheidungen ist ein Grund Pflicht (geht ans Büro und später in die Artikelbeschreibung)
   var GRUND_PFLICHT = ['Sehr gut', 'Gut', 'Nicht verkaufbar'];
   var LEERLAUF_MINUTEN = 30;
+  // Bilder zum Grund: höchstens 3 pro Position, vor dem Senden auf 1600 px verkleinert (JPEG)
+  var BILDER_MAX = 3;
+  var BILD_MAX_PX = 1600;
+  var BILD_MAX_ZEICHEN = 2000000;
   var ABFRAGE_SEKUNDEN = 8;
 
   // Die Seite liegt unter …/zw-station, die Aktionen unter …/zw-station/<aktion>
   var BASIS = location.pathname.replace(/\/+$/, '') + '/';
   var $ = function (id) { return document.getElementById(id); };
   var eur = new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' });
-  var zustand = { schluessel: null, name: '', rolle: '', retoure: null, auswahl: {}, vorschau: {}, grund: {}, preis: {}, abfrage: null, letzteAktivitaet: Date.now(), zwListe: [], tab: 'ret' };
+  var zustand = { schluessel: null, name: '', rolle: '', retoure: null, auswahl: {}, vorschau: {}, grund: {}, preis: {}, bilder: {}, bilderLaden: {}, abfrage: null, letzteAktivitaet: Date.now(), zwListe: [], tab: 'ret' };
 
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
   function speichern(k, v) { try { if (v == null) sessionStorage.removeItem(k); else sessionStorage.setItem(k, v); } catch (e) {} }
@@ -372,7 +384,7 @@ td .gebucht { color: var(--ok); font-weight: 600; }
   function oeffneRetoure(nr) {
     fehler('list-error');
     api('retoure', { query: { nr: nr } }).then(function (d) {
-      zustand.auswahl = {}; zustand.vorschau = {}; zustand.grund = {}; zustand.preis = {};
+      zustand.auswahl = {}; zustand.vorschau = {}; zustand.grund = {}; zustand.preis = {}; zustand.bilder = {}; zustand.bilderLaden = {};
       zustand.retoure = d.retoure;
       $('search-input').value = '';
       zeige('s-ret');
@@ -443,7 +455,7 @@ td .gebucht { color: var(--ok); font-weight: 600; }
     var h = '<div class="eingabe"><label><span>Grund' + (pflicht ? ' <span class="pflicht">*</span>' : ' (freiwillig)') + '</span>' +
       '<small>' + (OHNE_ARTIKEL.indexOf(wahl) >= 0 ? 'Geht ans Büro.' : 'Geht ans Büro und später in die Beschreibung des ZW-Artikels.') + '</small>' +
       '<textarea data-grund="' + esc(p.positionId) + '" maxlength="500" placeholder="z. B. Kratzer an der linken Seite, Verpackung fehlt"' +
-      (pflicht && !grund.trim() ? ' class="fehlt"' : '') + '>' + esc(grund) + '</textarea></label>';
+      (pflicht && !grund.trim() ? ' class="fehlt"' : '') + '>' + esc(grund) + '</textarea></label>' + (wahl !== 'Kein ZW' ? bilderHtml(p.positionId) : '');
     var v = zustand.vorschau[p.positionId + '|' + wahl];
     if (v && v.artikel && !v.fehler) {
       var preis = zustand.preis[p.positionId];
@@ -455,6 +467,60 @@ td .gebucht { color: var(--ok); font-weight: 600; }
     if (wahl === 'Nicht verkaufbar') h += '<span class="hint">Das Büro bekommt eine Mail mit dem Grund. Sind alle Positionen entschieden, geht die Retoure auf 9.1.3 (Reklamieren).</span>';
     return h + '</div>';
   }
+
+  function bilderHtml(pos) {
+    var liste = zustand.bilder[pos] || [], laden = zustand.bilderLaden[pos] || 0;
+    var h = '<div class="eingabe-bilder"><span><b>Bilder</b> (freiwillig, bis ' + BILDER_MAX + ')</span> <small class="hint">Geht mit dem Grund als Anhang in die Mail.</small><div class="bilder">' +
+      liste.map(function (b, i) {
+        return '<figure><img src="' + esc(b.daten) + '" alt="Bild ' + (i + 1) + '"><button type="button" data-bild-weg="' + esc(pos) + '" data-i="' + i + '" aria-label="Bild ' + (i + 1) + ' entfernen">×</button></figure>';
+      }).join('');
+    if (laden) h += '<span class="info">Bild wird vorbereitet …</span>';
+    else if (liste.length < BILDER_MAX) h += '<label class="datei">+ Bild hinzufügen<input type="file" accept="image/*" multiple data-bild="' + esc(pos) + '"></label>';
+    return h + '</div></div>';
+  }
+
+  // Bild im Browser verkleinern und als JPEG (Data-URL) merken. So bleibt die Anfrage an n8n klein.
+  function bildVerkleinern(datei) {
+    return new Promise(function (ok, nein) {
+      if (datei.type && !/^image\//.test(datei.type)) return nein(new Error('„' + datei.name + '“ ist kein Bild.'));
+      var url = URL.createObjectURL(datei), img = new Image();
+      img.onload = function () {
+        URL.revokeObjectURL(url);
+        var f = Math.min(1, BILD_MAX_PX / Math.max(img.naturalWidth, img.naturalHeight, 1));
+        var c = document.createElement('canvas');
+        c.width = Math.max(1, Math.round(img.naturalWidth * f));
+        c.height = Math.max(1, Math.round(img.naturalHeight * f));
+        var ctx = c.getContext('2d');
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(0, 0, c.width, c.height);
+        ctx.drawImage(img, 0, 0, c.width, c.height);
+        var q = 0.82, daten = c.toDataURL('image/jpeg', q);
+        while (daten.length > BILD_MAX_ZEICHEN && q > 0.4) { q -= 0.15; daten = c.toDataURL('image/jpeg', q); }
+        if (daten.length > BILD_MAX_ZEICHEN) return nein(new Error('„' + datei.name + '“ ist zu groß.'));
+        ok({ name: datei.name, daten: daten });
+      };
+      img.onerror = function () { URL.revokeObjectURL(url); nein(new Error('„' + datei.name + '“ lässt sich nicht öffnen. Bitte JPEG oder PNG nehmen.')); };
+      img.src = url;
+    });
+  }
+
+  $('pos-list').addEventListener('change', function (e) {
+    var t = e.target, pos = t.dataset && t.dataset.bild;
+    if (!pos || !t.files) return;
+    var frei = BILDER_MAX - (zustand.bilder[pos] || []).length;
+    var dateien = Array.prototype.slice.call(t.files, 0, Math.max(0, frei));
+    if (t.files.length > dateien.length) fehler('ret-error', 'Höchstens ' + BILDER_MAX + ' Bilder pro Position.'); else fehler('ret-error');
+    if (!dateien.length) return;
+    zustand.bilderLaden[pos] = (zustand.bilderLaden[pos] || 0) + 1;
+    zeigeRetoure();
+    Promise.all(dateien.map(function (d) {
+      return bildVerkleinern(d).catch(function (err) { fehler('ret-error', err.message); return null; });
+    })).then(function (fertig) {
+      zustand.bilderLaden[pos] -= 1;
+      zustand.bilder[pos] = (zustand.bilder[pos] || []).concat(fertig.filter(Boolean)).slice(0, BILDER_MAX);
+      zeigeRetoure();
+    });
+  });
 
   function betrag(z) { return z == null ? '' : z.toFixed(2).replace('.', ','); }
 
@@ -504,9 +570,17 @@ td .gebucht { color: var(--ok); font-weight: 600; }
     }
   }
 
-  function grundText(p) { return p.grund ? ' · Grund: ' + esc(p.grund) : ''; }
+  function grundText(p) {
+    return (p.grund ? ' · Grund: ' + esc(p.grund) : '') + (p.bilder ? ' · ' + p.bilder + (p.bilder === 1 ? ' Bild' : ' Bilder') : '');
+  }
 
   $('pos-list').addEventListener('click', function (e) {
+    var weg = e.target.closest('[data-bild-weg]');
+    if (weg) {
+      (zustand.bilder[weg.dataset.bildWeg] || []).splice(Number(weg.dataset.i), 1);
+      zeigeRetoure();
+      return;
+    }
     var b = e.target.closest('.cond button'); if (!b) return;
     var pos = b.dataset.pos, z = b.dataset.z;
     if (zustand.auswahl[pos] === z) delete zustand.auswahl[pos]; else zustand.auswahl[pos] = z;
@@ -530,11 +604,12 @@ td .gebucht { color: var(--ok); font-weight: 600; }
     var falscherPreis = gewaehlt.filter(function (p) {
       return zustand.preis[p.positionId] != null && preisLesen(zustand.preis[p.positionId]) === null;
     }).length;
-    $('anlegen').disabled = gewaehlt.length === 0 || ohneGrund > 0 || falscherPreis > 0;
+    var bilderLaden = gewaehlt.filter(function (p) { return zustand.bilderLaden[p.positionId] > 0; }).length;
+    $('anlegen').disabled = gewaehlt.length === 0 || ohneGrund > 0 || falscherPreis > 0 || bilderLaden > 0;
     $('anlegen').textContent = gewaehlt.length > 1 ? gewaehlt.length + ' Positionen anlegen' : 'Anlegen';
     $('anlegen').hidden = !r.positionen.some(offen);
     $('anlegen-hint').textContent = !r.positionen.some(offen) ? 'Alle Positionen sind entschieden.'
-      : [ohneGrund ? 'Bitte Grund eintragen (' + ohneGrund + ')' : '', falscherPreis ? 'Preis prüfen (' + falscherPreis + ')' : '',
+      : [ohneGrund ? 'Bitte Grund eintragen (' + ohneGrund + ')' : '', bilderLaden ? 'Bilder werden vorbereitet' : '', falscherPreis ? 'Preis prüfen (' + falscherPreis + ')' : '',
         nochOffen ? nochOffen + ' Position(en) ohne Zustand' : ''].filter(Boolean).join(' · ');
   }
 
@@ -546,14 +621,15 @@ td .gebucht { color: var(--ok); font-weight: 600; }
         var v = zustand.vorschau[p.positionId + '|' + z];
         var preis = zustand.preis[p.positionId];
         return { positionId: p.positionId, zustand: z, grund: String(zustand.grund[p.positionId] || '').trim(),
-          preis: v && v.artikel && preis != null ? preis : undefined };
+          preis: v && v.artikel && preis != null ? preis : undefined,
+          bilder: (z === 'Kein ZW' ? [] : zustand.bilder[p.positionId] || []).map(function (b) { return { name: b.name, daten: b.daten }; }) };
       });
     if (!liste.length) return;
     fehler('ret-error');
     $('anlegen').disabled = true;
     $('anlegen').textContent = 'Wird angelegt …';
     api('anlegen', { body: { retoureId: r.id, entscheidungen: liste } }).then(function (d) {
-      liste.forEach(function (x) { delete zustand.auswahl[x.positionId]; delete zustand.grund[x.positionId]; delete zustand.preis[x.positionId]; });
+      liste.forEach(function (x) { delete zustand.auswahl[x.positionId]; delete zustand.grund[x.positionId]; delete zustand.preis[x.positionId]; delete zustand.bilder[x.positionId]; });
       // Ergebnis direkt übernehmen: n8n speichert den Stand erst kurz nach der Antwort,
       // ein sofortiges Neuladen könnte noch den alten Stand liefern.
       d.ergebnisse.forEach(function (e) {

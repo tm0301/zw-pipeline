@@ -110,9 +110,15 @@ const codeLogik = mitKopf(
   'return [{ json: antwort }];\n');
 
 const codeMailsAufteilen = mitKopf(
-  '// Eine Mail pro Artikel, der auf Freigabe wartet\n' +
+  '// Eine Mail pro Artikel. Bilder vom Lager (Base64) werden zu Dateien, die „Freigabe-Mail senden“ anhängt.\n' +
   'const mails = $input.first().json.mails || [];\n' +
-  'return mails.map((m) => ({ json: m }));\n');
+  'return mails.map((m) => {\n' +
+  '  const { anhaenge, ...json } = m;\n' +
+  '  const binary = {};\n' +
+  '  (anhaenge || []).forEach((a, i) => { binary[\'bild\' + (i + 1)] = { data: a.daten, mimeType: a.mimeType, fileName: a.name }; });\n' +
+  '  json.anhangNamen = Object.keys(binary).join(\',\');\n' +
+  '  return json.anhangNamen ? { json, binary } : { json };\n' +
+  '});\n');
 
 const codeMailergebnis = mitKopf(nurNoetig(['zwNachMailversand']) + '\n' +
   '// Mails, die nicht rausgingen, als Fehler vermerken (das Lager kann neu anlegen). Danach antwortet „Antwort senden“.\n' +
@@ -292,7 +298,7 @@ nodes.push({
     subject: '={{ $json.betreff }}',
     emailFormat: 'html',
     html: '={{ $json.html }}',
-    options: { appendAttribution: false },
+    options: { appendAttribution: false, fileAttachments: '={{ $json.anhangNamen }}' },
   },
   id: id('Freigabe-Mail senden'), name: 'Freigabe-Mail senden', type: 'n8n-nodes-base.emailSend', typeVersion: 2.1,
   position: [2500, mitte - 160], onError: 'continueRegularOutput',
