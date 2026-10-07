@@ -7,76 +7,110 @@
 <title>ZW-Station</title>
 <style>
 :root {
-  --bg: #eef1f3; --surface: #ffffff; --surface-2: #f5f7f8; --fg: #16212b; --muted: #5b6b78; --line: #d5dde3;
-  --accent: #1f5f8b; --accent-ink: #ffffff; --ok: #1d7a46; --ok-bg: #e3f3e9; --warn: #9a5a00; --warn-bg: #fdf0da;
-  --err: #b3261e; --err-bg: #fbe5e3; --info-bg: #e6f0f7;
+  --bg: #f3f6f4; --surface: #ffffff; --surface-2: #f7faf8; --fg: #1c2a23; --muted: #66766e; --line: #e0e7e2;
+  --accent: #16a15b; --accent-dark: #11834a; --accent-ink: #ffffff; --accent-soft: #e7f6ee;
+  --ok: #15803d; --ok-bg: #e5f5ea; --warn: #9a5b06; --warn-bg: #fff3dc;
+  --err: #c0362c; --err-bg: #fdeceb; --info-bg: #eef6f1;
   --font-ui: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --font-code: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --schatten: 0 1px 2px rgba(20, 50, 35, .06), 0 2px 8px rgba(20, 50, 35, .05);
   color-scheme: light;
 }
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --bg: #0f161c; --surface: #172129; --surface-2: #1d2932; --fg: #e6edf2; --muted: #93a4b1; --line: #2c3a45;
-    --accent: #6fb3e0; --accent-ink: #0b1720; --ok: #5fd08e; --ok-bg: #143323; --warn: #f0b45a; --warn-bg: #3a2a10;
-    --err: #ff8a80; --err-bg: #3d1a18; --info-bg: #16293a; color-scheme: dark;
-  }
-}
 * { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.45 var(--font-ui); padding: 0 16px 48px; }
-.wrap { max-width: 900px; margin: 0 auto; display: flex; flex-direction: column; gap: 18px; }
-header.bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding-top: 18px; }
-.brand { display: flex; align-items: baseline; gap: 10px; }
-.brand h1 { font-size: 1.5rem; margin: 0; }
-.brand span { color: var(--muted); font-size: .9rem; }
-.who { display: flex; align-items: center; gap: 12px; color: var(--muted); font-size: .95rem; }
-.banner { font-size: .9rem; color: var(--warn); background: var(--warn-bg); padding: 8px 12px; border-radius: 8px; margin: 0; }
-.card { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 22px; display: flex; flex-direction: column; gap: 16px; }
-.card h2 { margin: 0; font-size: 1.3rem; }
-.hint { color: var(--muted); margin: 0; }
+html, body { height: 100%; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.45 var(--font-ui); }
 button { font-family: var(--font-ui); cursor: pointer; }
 button:disabled { cursor: not-allowed; opacity: .5; }
-button:focus-visible, input:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
-.btn { font-size: 1.05rem; font-weight: 600; padding: 14px 22px; border-radius: 10px; border: 1px solid var(--accent); background: var(--accent); color: var(--accent-ink); min-height: 54px; }
-.btn.ghost { background: transparent; color: var(--accent); }
-.btn.small { min-height: 40px; padding: 8px 14px; font-size: .95rem; }
-.linkbtn { background: none; border: none; color: var(--accent); text-decoration: underline; font-size: .95rem; padding: 6px 0; }
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+[hidden] { display: none !important; }
+.hint { color: var(--muted); margin: 0; }
+.error { color: var(--err); background: var(--err-bg); padding: 10px 12px; border-radius: 8px; margin: 0; font-weight: 500; }
+
+/* Logo */
+.logo { display: flex; align-items: center; gap: 10px; }
+.logo-wort { font-weight: 800; font-size: 1.25rem; letter-spacing: -.02em; color: var(--accent); }
+.logo-app { font-weight: 700; font-size: 1.05rem; color: var(--fg); }
+
+/* Knöpfe und Felder */
+.btn { font-size: 1rem; font-weight: 600; padding: 12px 20px; border-radius: 10px; border: 1px solid var(--accent); background: var(--accent); color: var(--accent-ink); min-height: 48px; }
+.btn:hover:not(:disabled) { background: var(--accent-dark); border-color: var(--accent-dark); }
+.btn.ghost { background: var(--surface); color: var(--fg); border-color: var(--line); }
+.btn.ghost:hover:not(:disabled) { background: var(--surface-2); border-color: var(--muted); }
+.btn.small { min-height: 38px; padding: 7px 14px; font-size: .92rem; }
+.linkbtn { background: none; border: none; color: var(--accent-dark); text-decoration: underline; font-size: .92rem; padding: 4px 0; }
 .field { display: flex; flex-direction: column; gap: 6px; }
 .field label { font-weight: 500; font-size: .95rem; }
-.field input, .search input, textarea { font: 500 1.1rem var(--font-ui); padding: 12px 14px; border-radius: 10px; border: 2px solid var(--line); background: var(--surface-2); color: var(--fg); min-width: 0; }
+.field input, textarea, .feld { font: 500 1rem var(--font-ui); padding: 11px 13px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface); color: var(--fg); min-width: 0; }
 textarea { font: .85rem var(--font-code); width: 100%; min-height: 90px; }
-.eingabe textarea { width: 100%; padding: 10px 12px; border-radius: 10px; border: 2px solid var(--line); background: var(--surface); color: var(--fg); }
-.search { display: flex; gap: 10px; flex-wrap: wrap; }
-.search input { flex: 1 1 220px; font-family: var(--font-code); }
-.error { color: var(--err); background: var(--err-bg); padding: 10px 12px; border-radius: 8px; margin: 0; font-weight: 500; }
-.list { display: flex; flex-direction: column; gap: 10px; }
-.ret { display: grid; grid-template-columns: 1fr auto; gap: 6px 16px; align-items: center; text-align: left; padding: 16px 18px; border-radius: 12px; border: 2px solid var(--line); background: var(--surface-2); color: var(--fg); font-size: 1rem; }
-.ret:hover { border-color: var(--accent); }
-.ret .nr { font: 600 1.25rem var(--font-code); }
-.ret .meta { color: var(--muted); font-size: .9rem; }
-.badges { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
-.badge { font-size: .8rem; font-weight: 600; padding: 4px 10px; border-radius: 999px; background: var(--surface); border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
-.badge.ok { background: var(--ok-bg); color: var(--ok); border-color: transparent; }
-.badge.warn { background: var(--warn-bg); color: var(--warn); border-color: transparent; }
-.badge.err { background: var(--err-bg); color: var(--err); border-color: transparent; }
+
+/* Anmeldung */
+.mitte { min-height: 100%; display: grid; place-items: center; padding: 24px 16px; }
+.karte { width: 100%; max-width: 440px; background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 28px; display: flex; flex-direction: column; gap: 16px; box-shadow: var(--schatten); }
+.karte.breit { max-width: 640px; }
+.karte h2 { margin: 0; font-size: 1.2rem; }
+.liste { display: flex; flex-direction: column; gap: 12px; }
+.setup { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+
+/* Aufbau: links Auswahl, rechts Inhalt */
+.app { display: grid; grid-template-columns: 300px minmax(0, 1fr); min-height: 100%; }
+.side { background: var(--surface); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 100vh; position: sticky; top: 0; max-height: 100vh; }
+.side-kopf { padding: 18px 18px 14px; display: flex; flex-direction: column; gap: 14px; border-bottom: 1px solid var(--line); }
+.seg { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 10px; padding: 3px; }
+.seg button { border: 0; background: transparent; border-radius: 8px; padding: 8px 6px; font-weight: 600; font-size: .9rem; color: var(--muted); }
+.seg button[aria-selected="true"] { background: var(--surface); color: var(--fg); box-shadow: var(--schatten); }
+.seg .zahl { font-weight: 700; color: var(--accent-dark); margin-left: 4px; }
+.side-suche { display: flex; gap: 6px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+.side-suche input { flex: 1; font-family: var(--font-code); font-size: .95rem; padding: 9px 11px; }
+.side-suche button { min-height: 0; padding: 8px 12px; }
+.side-liste { flex: 1; overflow-y: auto; padding: 6px 0; }
+.side-item { width: 100%; display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; align-items: center; text-align: left; padding: 10px 18px; border: 0; border-left: 3px solid transparent; background: transparent; color: var(--fg); font-size: .95rem; }
+.side-item:hover { background: var(--surface-2); }
+.side-item[aria-current="true"] { background: var(--accent-soft); border-left-color: var(--accent); }
+.side-item .nr { font: 600 1rem var(--font-code); }
+.side-item .klein { grid-column: 1 / -1; color: var(--muted); font-size: .8rem; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.side-item .anzahl { color: var(--muted); font-weight: 600; font-size: .9rem; }
+.side-item.filter { display: flex; justify-content: space-between; padding: 12px 18px; }
+.side-item.filter .anzahl { color: var(--fg); }
+.side-info { padding: 12px 18px; }
+.side-fuss { border-top: 1px solid var(--line); padding: 12px 18px; display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+.punkt { display: inline-block; font-size: .72rem; font-weight: 700; padding: 1px 7px; border-radius: 999px; }
+.punkt.ok { background: var(--ok-bg); color: var(--ok); }
+.punkt.warn { background: var(--warn-bg); color: var(--warn); }
+.punkt.err { background: var(--err-bg); color: var(--err); }
+
+.haupt { padding: 16px 20px 48px; display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.kopf { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 16px 20px; display: flex; flex-wrap: wrap; align-items: center; gap: 12px 18px; box-shadow: var(--schatten); }
+.kopf .titel { flex: 1 1 260px; min-width: 0; }
+.kopf h1 { margin: 0; font-size: 1.3rem; }
+.kopf .unter { color: var(--muted); font-size: .92rem; }
+.kopf .unter b { color: var(--fg); }
+.marke { font-size: .82rem; font-weight: 700; padding: 5px 10px; border-radius: 6px; background: var(--warn-bg); color: var(--warn); white-space: nowrap; }
+.wer { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: .92rem; }
+.leer { text-align: center; color: var(--muted); padding: 48px 16px; }
+.inhalt { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 20px; display: flex; flex-direction: column; gap: 16px; box-shadow: var(--schatten); }
+
+/* Retoure */
+.notes { margin: 0; padding: 10px 12px 10px 30px; border-radius: 10px; background: var(--warn-bg); color: var(--fg); font-size: .95rem; }
+.notes small { color: var(--muted); }
 .pos { border: 1px solid var(--line); border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 12px; background: var(--surface-2); }
-.pos-head { display: grid; grid-template-columns: 64px 1fr; gap: 14px; align-items: start; }
-.thumb { width: 64px; aspect-ratio: 1; border-radius: 10px; background: var(--surface); border: 1px solid var(--line); display: grid; place-items: center; color: var(--muted); font-size: .7rem; text-align: center; }
-.pos h3 { margin: 0 0 4px; font-size: 1.05rem; overflow-wrap: anywhere; }
-.pos .meta { display: flex; flex-wrap: wrap; gap: 4px 14px; color: var(--muted); font-size: .88rem; }
+.pos-head { display: grid; grid-template-columns: 56px 1fr; gap: 14px; align-items: start; }
+.thumb { width: 56px; aspect-ratio: 1; border-radius: 10px; background: var(--surface); border: 1px solid var(--line); display: grid; place-items: center; color: var(--muted); font-size: .68rem; text-align: center; }
+.pos h3 { margin: 0 0 4px; font-size: 1.02rem; overflow-wrap: anywhere; }
+.pos .meta { display: flex; flex-wrap: wrap; gap: 4px 14px; color: var(--muted); font-size: .86rem; }
 .pos .meta b { font-family: var(--font-code); color: var(--fg); font-weight: 600; }
 .cond { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
-.cond button { min-height: 64px; border-radius: 10px; border: 2px solid var(--line); background: var(--surface); color: var(--fg); font-weight: 600; font-size: .98rem; padding: 8px; }
+.cond button { min-height: 56px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface); color: var(--fg); font-weight: 600; font-size: .95rem; padding: 8px; }
 .cond button:hover { border-color: var(--accent); }
 .cond button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
-.cond button.neg[aria-pressed="true"] { background: var(--muted); border-color: var(--muted); color: var(--surface); }
+.cond button.neg[aria-pressed="true"] { background: #5c6b64; border-color: #5c6b64; color: #fff; }
 .preview { border-radius: 10px; padding: 12px 14px; background: var(--info-bg); display: flex; flex-direction: column; gap: 6px; }
 .preview .row { display: flex; flex-wrap: wrap; gap: 4px 18px; align-items: baseline; }
-.preview .price { font: 700 1.35rem var(--font-code); }
+.preview .price { font: 700 1.3rem var(--font-code); }
 .preview .strike { color: var(--muted); text-decoration: line-through; font-family: var(--font-code); }
-.preview .warn { color: var(--warn); background: var(--warn-bg); padding: 6px 10px; border-radius: 8px; font-size: .92rem; }
-.preview .info { color: var(--muted); font-size: .88rem; }
+.preview .warn { color: var(--warn); background: var(--warn-bg); padding: 6px 10px; border-radius: 8px; font-size: .9rem; }
+.preview .info { color: var(--muted); font-size: .86rem; }
 .preview.err { background: var(--err-bg); color: var(--err); }
-.status { display: flex; align-items: center; gap: 10px; font-weight: 600; padding: 10px 12px; border-radius: 10px; }
+.status { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; font-weight: 600; padding: 10px 12px; border-radius: 10px; }
 .status.wartet { background: var(--warn-bg); color: var(--warn); }
 .status.ok { background: var(--ok-bg); color: var(--ok); }
 .status.err { background: var(--err-bg); color: var(--err); }
@@ -84,67 +118,62 @@ textarea { font: .85rem var(--font-code); width: 100%; min-height: 90px; }
 .status small { font-weight: 400; }
 .actions { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
 .comments { margin: 0; padding-left: 18px; color: var(--muted); font-size: .9rem; }
-details.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 4px 20px; }
-details.panel > summary { cursor: pointer; padding: 14px 0; font-weight: 600; }
-.table-wrap { overflow-x: auto; padding-bottom: 16px; }
-table { border-collapse: collapse; width: 100%; font-size: .88rem; font-variant-numeric: tabular-nums; }
-th, td { text-align: left; padding: 7px 9px; border-bottom: 1px solid var(--line); white-space: nowrap; }
-th { font-size: .72rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
-td.code { font-family: var(--font-code); }
-.tabs { display: flex; gap: 8px; }
-.tabs button { flex: 1 1 0; min-height: 50px; border-radius: 10px; border: 2px solid var(--line); background: var(--surface); color: var(--fg); font-weight: 600; font-size: 1.02rem; }
-.tabs button[aria-selected="true"] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
-.filter { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
-.filter input, .filter select { font: 500 1rem var(--font-ui); padding: 10px 12px; border-radius: 10px; border: 2px solid var(--line); background: var(--surface-2); color: var(--fg); min-width: 0; }
-.filter input { flex: 1 1 200px; }
-td .btn.small { min-height: 36px; padding: 6px 12px; font-size: .88rem; }
-td .gebucht { color: var(--ok); font-weight: 600; }
-.notes { margin: 0; padding: 10px 12px 10px 30px; border-radius: 10px; background: var(--warn-bg); color: var(--fg); font-size: .95rem; }
-.notes small { color: var(--muted); }
 .eingabe { display: flex; flex-direction: column; gap: 10px; }
-.eingabe label { font-weight: 600; font-size: .95rem; display: flex; flex-direction: column; gap: 6px; }
+.eingabe label { font-weight: 600; font-size: .93rem; display: flex; flex-direction: column; gap: 6px; }
 .eingabe label small { font-weight: 400; color: var(--muted); }
-.eingabe textarea { font: 1rem var(--font-ui); min-height: 70px; resize: vertical; }
-.eingabe input { font: 600 1.15rem var(--font-code); padding: 10px 12px; border-radius: 10px; border: 2px solid var(--line); background: var(--surface); color: var(--fg); max-width: 220px; }
-.eingabe .fehlt { border-color: var(--err); }
+.eingabe textarea { font: 1rem var(--font-ui); min-height: 70px; resize: vertical; width: 100%; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface); color: var(--fg); }
+.eingabe input { font: 600 1.1rem var(--font-code); padding: 9px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface); color: var(--fg); max-width: 220px; }
+.eingabe .fehlt { border-color: var(--err); box-shadow: 0 0 0 1px var(--err); }
 .eingabe .pflicht { color: var(--err); }
 .preiswarn { display: flex; flex-direction: column; gap: 4px; }
-.eingabe-bilder { display: flex; flex-direction: column; gap: 6px; }
+.preiswarn span { color: var(--warn); background: var(--warn-bg); padding: 6px 10px; border-radius: 8px; font-size: .88rem; }
+.eingabe-bilder { display: flex; flex-direction: column; gap: 6px; font-size: .93rem; }
 .bilder { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .bilder figure { margin: 0; position: relative; width: 84px; aspect-ratio: 1; border-radius: 10px; overflow: hidden; border: 1px solid var(--line); background: var(--surface); }
 .bilder figure img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.bilder figure button { position: absolute; top: 4px; right: 4px; width: 30px; height: 30px; border-radius: 50%; border: 0; background: rgba(0,0,0,.65); color: #fff; font-size: 1rem; line-height: 1; cursor: pointer; }
-.bilder .datei { position: relative; display: inline-flex; flex-direction: row; align-items: center; justify-content: center; min-height: 44px; padding: 8px 14px; border-radius: 10px; border: 2px dashed var(--line); color: var(--fg); font-weight: 600; cursor: pointer; }
+.bilder figure button { position: absolute; top: 4px; right: 4px; width: 30px; height: 30px; border-radius: 50%; border: 0; background: rgba(0,0,0,.6); color: #fff; font-size: 1rem; line-height: 1; cursor: pointer; }
+.bilder .datei { position: relative; display: inline-flex; flex-direction: row; align-items: center; justify-content: center; min-height: 44px; padding: 8px 14px; border-radius: 10px; border: 2px dashed var(--line); background: var(--surface); color: var(--fg); font-weight: 600; cursor: pointer; }
+.bilder .datei:hover { border-color: var(--accent); }
 .bilder .datei input { position: absolute; width: 1px; height: 1px; opacity: 0; }
 .bilder .datei:focus-within { outline: 3px solid var(--accent); outline-offset: 2px; }
-.preiswarn span { color: var(--warn); background: var(--warn-bg); padding: 6px 10px; border-radius: 8px; font-size: .9rem; }
-.setup { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
-[hidden] { display: none !important; }
+
+/* ZW-Liste */
+.filter { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.filter input { flex: 1 1 220px; }
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: .88rem; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th { font-size: .72rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); background: var(--surface-2); }
+td.code { font-family: var(--font-code); }
+td .btn.small { min-height: 34px; padding: 5px 12px; font-size: .86rem; }
+td .gebucht { color: var(--ok); font-weight: 600; }
+details.panel { border: 1px solid var(--line); border-radius: 12px; padding: 2px 16px; }
+details.panel > summary { cursor: pointer; padding: 12px 0; font-weight: 600; }
+
+/* Tablet und Handy: Auswahl oben, Inhalt darunter */
+@media (max-width: 900px) {
+  .app { grid-template-columns: 1fr; }
+  .side { position: static; min-height: 0; max-height: none; border-right: 0; border-bottom: 1px solid var(--line); }
+  .side-liste { max-height: 260px; }
+  .side-fuss { display: none; }
+  .haupt { padding: 12px 12px 40px; }
+}
 @media (max-width: 640px) {
   /* drei ZW-Zustände in einer Reihe, darunter Nicht verkaufbar und Kein ZW */
   .cond { grid-template-columns: repeat(6, minmax(0, 1fr)); }
-  .cond button { grid-column: span 2; padding: 6px 4px; font-size: .92rem; overflow-wrap: anywhere; }
-  .cond button.neg { grid-column: span 3; min-height: 52px; }
-  .card { padding: 16px; }
+  .cond button { grid-column: span 2; padding: 6px 4px; font-size: .9rem; overflow-wrap: anywhere; }
+  .cond button.neg { grid-column: span 3; min-height: 48px; }
+  .inhalt, .karte { padding: 16px; }
 }
 </style>
 </head>
 <body>
-<div class="wrap">
-  <header class="bar">
-    <div class="brand"><h1>ZW-Station</h1><span>Lager · Zweite Wahl</span></div>
-    <div class="who" id="who" hidden><span id="who-name"></span><button class="btn ghost small" type="button" id="logout">Abmelden</button></div>
-  </header>
-  <p class="banner" id="banner" hidden>Probelauf: Retouren und Preise kommen echt aus plenty und Shopware (nur gelesen). Anlegen wird nur nachgestellt, es wird nichts in plenty oder Shopware geändert.</p>
-  <nav class="tabs" id="tabs" role="tablist" hidden>
-    <button type="button" role="tab" id="tab-ret" aria-selected="true">Retouren</button>
-    <button type="button" role="tab" id="tab-zw" aria-selected="false">ZW-Liste</button>
-  </nav>
-
-  <!-- Anmeldung -->
-  <section class="card" id="s-login" hidden>
+<!-- Anmeldung -->
+<div class="mitte" id="s-login" hidden>
+  <section class="karte">
+    <div class="logo"><span class="logo-wort">mykitchens</span><span class="logo-app">ZW-Station</span></div>
     <h2>Anmelden</h2>
-    <form id="login-form" class="list" autocomplete="on">
+    <form id="login-form" class="liste" autocomplete="on">
       <div class="field"><label for="l-user">Benutzername</label><input id="l-user" name="username" autocomplete="username" required autocapitalize="none"></div>
       <div class="field"><label for="l-pass">Passwort</label><input id="l-pass" name="password" type="password" autocomplete="current-password" required></div>
       <p class="error" id="login-error" hidden></p>
@@ -152,9 +181,12 @@ td .gebucht { color: var(--ok); font-weight: 600; }
     </form>
     <button class="linkbtn" type="button" id="open-setup">Zugang einrichten (für Tobias)</button>
   </section>
+</div>
 
-  <!-- Zugang einrichten: läuft nur im Browser, nichts wird gesendet -->
-  <section class="card" id="s-setup" hidden>
+<!-- Zugang einrichten: läuft nur im Browser, nichts wird gesendet -->
+<div class="mitte" id="s-setup" hidden>
+  <section class="karte breit">
+    <div class="logo"><span class="logo-wort">mykitchens</span><span class="logo-app">ZW-Station</span></div>
     <h2>Zugang einrichten</h2>
     <p class="hint">Erzeugt den Eintrag für eine Person. Das Passwort verlässt diesen Browser nicht. Den Eintrag in n8n im Baustein „Einstellungen“ unter <b>einstellungen.benutzer</b> in die Liste einfügen.</p>
     <form id="setup-form" class="setup">
@@ -165,75 +197,96 @@ td .gebucht { color: var(--ok); font-weight: 600; }
       <button class="btn" type="submit">Eintrag erzeugen</button>
     </form>
     <textarea id="setup-out" readonly hidden aria-label="Eintrag für die Benutzerliste"></textarea>
-    <div class="actions">
-      <button class="linkbtn" type="button" id="close-setup">Zurück zur Anmeldung</button>
-    </div>
+    <button class="linkbtn" type="button" id="close-setup">Zurück zur Anmeldung</button>
   </section>
+</div>
 
-  <!-- Retouren-Liste -->
-  <section class="card" id="s-list" hidden>
-    <h2>Offene Retouren (Status 9.1.1)</h2>
-    <form class="search" id="search-form" autocomplete="off">
-      <input id="search-input" inputmode="numeric" placeholder="Retouren-Nr." aria-label="Retouren-Nr.">
-      <button class="btn" type="submit">Öffnen</button>
+<!-- Arbeitsfläche: links Auswahl, rechts Inhalt -->
+<div class="app" id="s-app" hidden>
+  <aside class="side">
+    <div class="side-kopf">
+      <div class="logo"><span class="logo-wort">mykitchens</span><span class="logo-app">ZW-Station</span></div>
+      <div class="seg" role="tablist">
+        <button type="button" role="tab" id="tab-ret" aria-selected="true">Retouren<span class="zahl" id="n-ret"></span></button>
+        <button type="button" role="tab" id="tab-zw" aria-selected="false">ZW-Artikel<span class="zahl" id="n-zw"></span></button>
+      </div>
+    </div>
+
+    <!-- Retouren (Status 9.1.1) -->
+    <form class="side-suche" id="search-form" autocomplete="off">
+      <input class="feld" id="search-input" inputmode="numeric" placeholder="Retouren-Nr." aria-label="Retouren-Nr. suchen oder eingeben">
+      <button class="btn small" type="submit">Öffnen</button>
     </form>
-    <p class="error" id="list-error" hidden></p>
-    <div class="list" id="ret-list"></div>
-    <p class="hint" id="list-loading" hidden>Retouren werden aus plenty geladen …</p>
-    <p class="hint" id="list-empty" hidden>Keine offenen Retouren.</p>
-  </section>
+    <div class="side-liste" id="side-ret">
+      <p class="hint side-info" id="list-loading" hidden>Retouren werden aus plenty geladen …</p>
+      <p class="error side-info" id="list-error" hidden></p>
+      <p class="hint side-info" id="list-empty" hidden>Keine offenen Retouren.</p>
+      <div id="ret-list"></div>
+    </div>
 
-  <!-- Retoure -->
-  <section class="card" id="s-ret" hidden>
-    <div class="actions">
-      <h2 id="ret-title"></h2>
-      <button class="linkbtn" type="button" id="back">← Alle Retouren</button>
+    <!-- Erledigte ZW-Artikel -->
+    <div class="side-liste" id="side-zw" hidden>
+      <div id="zw-filter"></div>
     </div>
-    <p class="hint" id="ret-meta"></p>
-    <ul class="notes" id="plenty-notes" hidden></ul>
-    <div class="list" id="pos-list"></div>
-    <p class="error" id="ret-error" hidden></p>
-    <div class="actions">
-      <span class="hint" id="anlegen-hint"></span>
-      <button class="btn" type="button" id="anlegen" disabled>Anlegen</button>
-    </div>
-    <details id="ret-comments-wrap" hidden><summary>Kommentare der ZW-Station (Probelauf: nicht in plenty)</summary><ul class="comments" id="ret-comments"></ul></details>
-  </section>
 
-  <!-- ZW-Liste (ersetzt die Excel-Liste) -->
-  <section class="card" id="s-zw" hidden>
-    <h2>ZW-Liste</h2>
-    <p class="hint">Alle freigegebenen ZW-Artikel. Nach dem Umbuchen im Lager „Bestand gebucht“ drücken.</p>
-    <div class="filter">
-      <input id="zw-suche" type="search" placeholder="Suchen: Retoure, Variante, Barcode, Name" aria-label="ZW-Liste durchsuchen">
-      <select id="zw-filter" aria-label="Filter">
-        <option value="offen">Noch nicht gebucht</option>
-        <option value="gebucht">Gebucht</option>
-        <option value="alle">Alle</option>
-      </select>
-      <button class="btn ghost small" type="button" id="zw-csv">CSV herunterladen</button>
+    <div class="side-fuss">
+      <button class="linkbtn" type="button" id="neu-laden">Liste neu laden</button>
+      <button class="linkbtn" type="button" id="reset" hidden>Probelauf zurücksetzen</button>
     </div>
-    <p class="error" id="zw-error" hidden></p>
-    <div class="table-wrap">
-      <table>
-        <thead><tr><th>Datum</th><th>Retoure</th><th>ZW-Variante</th><th>Barcode</th><th>Name</th><th>Zustand</th><th>Grund</th><th>Preis</th><th>Streichpreis</th><th>neu/+1</th><th>Bestand</th></tr></thead>
-        <tbody id="zw-liste"></tbody>
-      </table>
-    </div>
-    <details class="panel">
-      <summary>Protokoll (letzte 50 Einträge)</summary>
+  </aside>
+
+  <main class="haupt">
+    <header class="kopf">
+      <span class="marke" id="banner" hidden title="Retouren und Preise kommen echt aus plenty und Shopware (nur gelesen). Anlegen wird nur nachgestellt.">Probelauf</span>
+      <div class="titel">
+        <h1 id="kopf-titel">Retouren</h1>
+        <div class="unter" id="kopf-unter"></div>
+      </div>
+      <div class="wer"><span>Angemeldet als <b id="who-name"></b></span><button class="btn ghost small" type="button" id="logout">Abmelden</button></div>
+    </header>
+
+    <!-- Keine Retoure gewählt -->
+    <section class="inhalt leer" id="s-leer">
+      <p>Links eine Retoure wählen oder die Retouren-Nr. eingeben.</p>
+    </section>
+
+    <!-- Retoure -->
+    <section class="inhalt" id="s-ret" hidden>
+      <ul class="notes" id="plenty-notes" hidden></ul>
+      <div class="liste" id="pos-list"></div>
+      <p class="error" id="ret-error" hidden></p>
+      <div class="actions">
+        <span class="hint" id="anlegen-hint"></span>
+        <button class="btn" type="button" id="anlegen" disabled>Anlegen</button>
+      </div>
+      <details id="ret-comments-wrap" hidden><summary>Kommentare der ZW-Station (Probelauf: nicht in plenty)</summary><ul class="comments" id="ret-comments"></ul></details>
+    </section>
+
+    <!-- Erledigte ZW-Artikel (ersetzt die Excel-Liste) -->
+    <section class="inhalt" id="s-zw" hidden>
+      <p class="hint">Alle freigegebenen ZW-Artikel. Nach dem Umbuchen im Lager „Bestand gebucht“ drücken.</p>
+      <div class="filter">
+        <input class="feld" id="zw-suche" type="search" placeholder="Suchen: Retoure, Variante, Barcode, Name" aria-label="ZW-Liste durchsuchen">
+        <button class="btn ghost small" type="button" id="zw-csv">CSV herunterladen</button>
+      </div>
+      <p class="error" id="zw-error" hidden></p>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Zeit</th><th>Wer</th><th>Aktion</th><th>Retoure</th><th>Position</th><th>Zustand</th><th>Ergebnis</th></tr></thead>
-          <tbody id="protokoll"></tbody>
+          <thead><tr><th>Datum</th><th>Retoure</th><th>ZW-Variante</th><th>Barcode</th><th>Name</th><th>Zustand</th><th>Grund</th><th>Preis</th><th>Streichpreis</th><th>neu/+1</th><th>Bestand</th></tr></thead>
+          <tbody id="zw-liste"></tbody>
         </table>
       </div>
-    </details>
-    <div class="actions" id="admin-actions" hidden>
-      <span class="hint">Nur Probelauf: Entscheidungen, Protokoll und ZW-Liste auf Anfang setzen. In plenty und Shopware ändert sich nichts.</span>
-      <button class="btn ghost small" type="button" id="reset">Probelauf zurücksetzen</button>
-    </div>
-  </section>
+      <details class="panel">
+        <summary>Protokoll (letzte 50 Einträge)</summary>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Zeit</th><th>Wer</th><th>Aktion</th><th>Retoure</th><th>Position</th><th>Zustand</th><th>Ergebnis</th></tr></thead>
+            <tbody id="protokoll"></tbody>
+          </table>
+        </div>
+      </details>
+    </section>
+  </main>
 </div>
 
 <script>
@@ -254,22 +307,49 @@ td .gebucht { color: var(--ok); font-weight: 600; }
   var BASIS = location.pathname.replace(/\/+$/, '') + '/';
   var $ = function (id) { return document.getElementById(id); };
   var eur = new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' });
-  var zustand = { schluessel: null, name: '', rolle: '', retoure: null, auswahl: {}, vorschau: {}, grund: {}, preis: {}, bilder: {}, bilderLaden: {}, abfrage: null, letzteAktivitaet: Date.now(), zwListe: [], tab: 'ret' };
+  var zustand = { schluessel: null, name: '', rolle: '', retoure: null, auswahl: {}, vorschau: {}, grund: {}, preis: {}, bilder: {}, bilderLaden: {}, abfrage: null, letzteAktivitaet: Date.now(), zwListe: [], zwFilter: 'offen', retouren: null, tab: 'ret' };
 
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
   function speichern(k, v) { try { if (v == null) sessionStorage.removeItem(k); else sessionStorage.setItem(k, v); } catch (e) {} }
   function lesen(k) { try { return sessionStorage.getItem(k); } catch (e) { return null; } }
 
-  function zeige(id) {
-    ['s-login', 's-setup', 's-list', 's-ret', 's-zw'].forEach(function (s) { $(s).hidden = s !== id; });
-    var drin = id === 's-list' || id === 's-ret' || id === 's-zw';
-    $('who').hidden = !drin; $('banner').hidden = !drin; $('tabs').hidden = !drin;
-    $('tab-ret').setAttribute('aria-selected', String(id !== 's-zw'));
-    $('tab-zw').setAttribute('aria-selected', String(id === 's-zw'));
+  // Ansichten: 'login', 'setup' (ohne Seitenleiste) und 'ret', 'zw' (Arbeitsfläche mit Seitenleiste)
+  function zeige(ansicht) {
+    $('s-login').hidden = ansicht !== 'login';
+    $('s-setup').hidden = ansicht !== 'setup';
+    $('s-app').hidden = ansicht !== 'ret' && ansicht !== 'zw';
+    if ($('s-app').hidden) return;
+    zustand.tab = ansicht;
+    var ret = ansicht === 'ret';
+    $('tab-ret').setAttribute('aria-selected', String(ret));
+    $('tab-zw').setAttribute('aria-selected', String(!ret));
+    $('search-form').hidden = !ret; $('side-ret').hidden = !ret; $('side-zw').hidden = ret;
+    $('s-zw').hidden = ret;
+    $('s-ret').hidden = !ret || !zustand.retoure;
+    $('s-leer').hidden = !ret || !!zustand.retoure;
+    kopfSetzen();
   }
 
-  $('tab-ret').addEventListener('click', function () { if (zustand.retoure) { zeige('s-ret'); zeigeRetoure(); } else ladeListe(); });
-  $('tab-zw').addEventListener('click', function () { stoppeAbfrage(); zeige('s-zw'); ladeZwListe(); });
+  function kopfSetzen() {
+    if (zustand.tab === 'zw') {
+      $('kopf-titel').textContent = 'Erledigte ZW-Artikel';
+      $('kopf-unter').textContent = 'Freigegebene ZW-Artikel · Bestand in plenty abhaken';
+      return;
+    }
+    var r = zustand.retoure;
+    if (!r) {
+      $('kopf-titel').textContent = 'Retouren';
+      $('kopf-unter').textContent = 'Status 9.1.1 · Retoure - ZW erstellen';
+      return;
+    }
+    $('kopf-titel').textContent = 'Retoure ' + r.id;
+    $('kopf-unter').innerHTML = [datum(r.datum), r.shopAuftrag ? 'Shop-Auftrag <b>' + esc(r.shopAuftrag) + '</b>' : '', 'Status ' + esc(r.status),
+      r.probelaufFertig ? 'alle Positionen entschieden' + (r.probelaufStatus ? ', Status ' + esc(r.probelaufStatus) : '') + ' (Probelauf: nicht gesetzt)' : ''].filter(Boolean).join(' · ');
+  }
+
+  $('tab-ret').addEventListener('click', function () { zeige('ret'); if (zustand.retoure) zeigeRetoure(); else if (!zustand.retouren) ladeListe(); });
+  $('tab-zw').addEventListener('click', function () { stoppeAbfrage(); zeige('zw'); ladeZwListe(); });
+  $('neu-laden').addEventListener('click', function () { if (zustand.tab === 'zw') ladeZwListe(); else ladeListe(); });
 
   function fehler(id, text) { $(id).textContent = text || ''; $(id).hidden = !text; }
 
@@ -307,7 +387,7 @@ td .gebucht { color: var(--ok); font-weight: 600; }
     zustand.schluessel = null; zustand.retoure = null;
     speichern('zw-schluessel', null); speichern('zw-name', null); speichern('zw-rolle', null);
     stoppeAbfrage();
-    zeige('s-login');
+    zeige('login');
     fehler('login-error', grund || '');
     setTimeout(function () { $('l-user').focus(); }, 0);
   }
@@ -320,8 +400,8 @@ td .gebucht { color: var(--ok); font-weight: 600; }
 
   // ---------- Zugang einrichten (nur im Browser) ----------
   function hex(buf) { return Array.prototype.map.call(new Uint8Array(buf), function (b) { return ('0' + b.toString(16)).slice(-2); }).join(''); }
-  $('open-setup').addEventListener('click', function () { zeige('s-setup'); });
-  $('close-setup').addEventListener('click', function () { zeige('s-login'); });
+  $('open-setup').addEventListener('click', function () { zeige('setup'); });
+  $('close-setup').addEventListener('click', function () { zeige('login'); });
   $('setup-form').addEventListener('submit', function (e) {
     e.preventDefault();
     if (!window.crypto || !crypto.subtle) { alert('Dieser Browser kann hier keinen Hash erzeugen (nur über https).'); return; }
@@ -341,43 +421,67 @@ td .gebucht { color: var(--ok); font-weight: 600; }
   // ---------- Retouren ----------
   function start() {
     $('who-name').textContent = zustand.name;
-    $('admin-actions').hidden = zustand.rolle !== 'admin';
+    $('reset').hidden = zustand.rolle !== 'admin';
+    zustand.retoure = null;
+    zeige('ret');
     ladeListe();
+    ladeZwListe(true);
   }
 
   function ladeListe() {
-    stoppeAbfrage();
-    zustand.retoure = null;
-    zeige('s-list');
     fehler('list-error');
     $('list-loading').hidden = false;
-    $('ret-list').innerHTML = '';
     $('list-empty').hidden = true;
     api('retouren').then(function (d) {
       $('banner').hidden = String(d.modus || '').indexOf('probelauf') !== 0;
       $('list-loading').hidden = true;
-      $('list-empty').hidden = d.retouren.length > 0;
-      $('ret-list').innerHTML = d.retouren.map(function (r) {
-        var b = [];
-        if (r.probelaufFertig) b.push('<span class="badge ok">fertig' + (r.probelaufStatus ? ' → ' + esc(r.probelaufStatus) : '') + ' (Probelauf)</span>');
-        if (r.erledigt) b.push('<span class="badge ok">' + r.erledigt + ' erledigt</span>');
-        if (r.wartet) b.push('<span class="badge warn">' + r.wartet + ' wartet</span>');
-        if (r.fehler) b.push('<span class="badge err">' + r.fehler + ' Fehler</span>');
-        b.push('<span class="badge">' + r.anzahl + ' Artikel</span>');
-        return '<button type="button" class="ret" data-nr="' + esc(r.id) + '"><span><span class="nr">' + esc(r.id) + '</span><br><span class="meta">' +
-          esc(datum(r.datum)) + (r.shopAuftrag ? ' · Shop ' + esc(r.shopAuftrag) : '') + '</span></span><span class="badges">' + b.join('') + '</span></button>';
-      }).join('');
-      setTimeout(function () { $('search-input').focus(); }, 0);
+      zustand.retouren = d.retouren;
+      zeigeRetourenListe();
+      if (!zustand.retoure && window.matchMedia('(min-width: 901px)').matches) setTimeout(function () { $('search-input').focus(); }, 0);
     }).catch(function (err) { $('list-loading').hidden = true; fehler('list-error', err.message); });
   }
+
+  // Seitenleiste: Retouren-Nummern, beim Tippen gefiltert
+  function zeigeRetourenListe() {
+    var alle = zustand.retouren || [];
+    var such = $('search-input').value.trim();
+    var liste = such ? alle.filter(function (r) { return String(r.id).indexOf(such) >= 0 || String(r.shopAuftrag || '').toLowerCase().indexOf(such.toLowerCase()) >= 0; }) : alle;
+    $('n-ret').textContent = alle.length ? ' ' + alle.length : '';
+    $('list-empty').hidden = liste.length > 0 || !zustand.retouren;
+    $('list-empty').textContent = such ? 'Nicht in der Liste. Mit „Öffnen“ trotzdem suchen.' : 'Keine offenen Retouren.';
+    var aktiv = zustand.retoure ? String(zustand.retoure.id) : null;
+    $('ret-list').innerHTML = liste.map(function (r) {
+      var b = [];
+      if (r.probelaufFertig) b.push('<span class="punkt ok">fertig' + (r.probelaufStatus ? ' ' + esc(r.probelaufStatus) : '') + '</span>');
+      else if (r.erledigt) b.push('<span class="punkt ok">' + r.erledigt + ' erledigt</span>');
+      if (r.wartet) b.push('<span class="punkt warn">' + r.wartet + ' wartet</span>');
+      if (r.fehler) b.push('<span class="punkt err">' + r.fehler + ' Fehler</span>');
+      return '<button type="button" class="side-item" data-nr="' + esc(r.id) + '" aria-current="' + (String(r.id) === aktiv) + '">' +
+        '<span class="nr">' + esc(r.id) + '</span><span class="anzahl" title="Artikel">' + r.anzahl + ' Art.</span>' +
+        '<span class="klein">' + esc(datum(r.datum)) + (r.shopAuftrag ? ' · ' + esc(r.shopAuftrag) : '') + ' ' + b.join(' ') + '</span></button>';
+    }).join('');
+  }
+
+  // Zähler der geöffneten Retoure in der Seitenleiste nachziehen, ohne plenty neu zu fragen
+  function listenEintragAktualisieren() {
+    var r = zustand.retoure; if (!r || !zustand.retouren) return;
+    var e = zustand.retouren.filter(function (x) { return String(x.id) === String(r.id); })[0]; if (!e) return;
+    var st = r.positionen.map(function (p) { return p.status; });
+    e.erledigt = st.filter(function (s) { return ['angelegt', 'plus1', 'nicht_verkaufbar', 'kein_zw'].indexOf(s) >= 0; }).length;
+    e.wartet = st.filter(function (s) { return s === 'wartet'; }).length;
+    e.fehler = st.filter(function (s) { return s === 'fehler'; }).length;
+    e.probelaufFertig = r.probelaufFertig; e.probelaufStatus = r.probelaufStatus;
+    zeigeRetourenListe();
+  }
+
   $('ret-list').addEventListener('click', function (e) {
-    var b = e.target.closest('.ret'); if (b) oeffneRetoure(b.dataset.nr);
+    var b = e.target.closest('.side-item'); if (b) oeffneRetoure(b.dataset.nr);
   });
+  $('search-input').addEventListener('input', zeigeRetourenListe);
   $('search-form').addEventListener('submit', function (e) {
     e.preventDefault();
     var nr = $('search-input').value.trim(); if (nr) oeffneRetoure(nr);
   });
-  $('back').addEventListener('click', ladeListe);
 
   function datum(iso) { if (!iso) return ''; var t = String(iso).slice(0, 10).split('-'); return t.length === 3 ? t[2] + '.' + t[1] + '.' + t[0] : iso; }
 
@@ -387,8 +491,11 @@ td .gebucht { color: var(--ok); font-weight: 600; }
       zustand.auswahl = {}; zustand.vorschau = {}; zustand.grund = {}; zustand.preis = {}; zustand.bilder = {}; zustand.bilderLaden = {};
       zustand.retoure = d.retoure;
       $('search-input').value = '';
-      zeige('s-ret');
+      zeige('ret');
       zeigeRetoure();
+      listenEintragAktualisieren();
+      // Auf Tablet und Handy steht die Auswahl oben: zur Retoure springen
+      if (!window.matchMedia('(min-width: 901px)').matches) $('s-ret').scrollIntoView({ behavior: 'smooth', block: 'start' });
     }).catch(function (err) { fehler('list-error', err.message); });
   }
 
@@ -396,9 +503,7 @@ td .gebucht { color: var(--ok); font-weight: 600; }
 
   function zeigeRetoure() {
     var r = zustand.retoure;
-    $('ret-title').textContent = 'Retoure ' + r.id;
-    $('ret-meta').textContent = [datum(r.datum), r.shopAuftrag ? 'Shop-Auftrag ' + r.shopAuftrag : '', 'Status ' + r.status,
-      r.probelaufFertig ? 'alle Positionen entschieden' + (r.probelaufStatus ? ', Status ' + r.probelaufStatus : '') + ' (Probelauf: nicht gesetzt)' : ''].filter(Boolean).join(' · ');
+    kopfSetzen();
     var notes = r.plentyKommentare || [];
     $('plenty-notes').hidden = !notes.length;
     $('plenty-notes').innerHTML = notes.map(function (k) { return '<li>' + esc(k.text) + (k.zeit ? ' <small>' + esc(datum(k.zeit)) + '</small>' : '') + '</li>'; }).join('');
@@ -638,21 +743,23 @@ td .gebucht { color: var(--ok); font-weight: 600; }
         });
       });
       zeigeRetoure();
+      listenEintragAktualisieren();
     }).catch(function (err) { fehler('ret-error', err.message); aktualisiereAnlegen(); });
   });
 
   function neuLaden() {
     if (!zustand.retoure) return Promise.resolve();
     return api('retoure', { query: { nr: zustand.retoure.id } }).then(function (d) {
-      if (!$('s-ret').hidden) { zustand.retoure = d.retoure; zeigeRetoure(); }
+      if (!$('s-ret').hidden && String(d.retoure.id) === String(zustand.retoure.id)) { zustand.retoure = d.retoure; zeigeRetoure(); listenEintragAktualisieren(); }
     });
   }
   function starteAbfrage() { if (!zustand.abfrage) zustand.abfrage = setInterval(function () { neuLaden().catch(function () {}); }, ABFRAGE_SEKUNDEN * 1000); }
   function stoppeAbfrage() { if (zustand.abfrage) { clearInterval(zustand.abfrage); zustand.abfrage = null; } }
 
   // ---------- ZW-Liste und Protokoll ----------
-  function ladeZwListe() {
-    fehler('zw-error');
+  // still = nur Zähler in der Seitenleiste auffrischen (beim Start), Fehler nicht anzeigen
+  function ladeZwListe(still) {
+    if (!still) fehler('zw-error');
     api('zw-liste').then(function (d) {
       zustand.zwListe = d.zwListe;
       zeigeZwListe();
@@ -660,11 +767,27 @@ td .gebucht { color: var(--ok); font-weight: 600; }
         return '<tr><td>' + esc(new Date(p.zeit).toLocaleString('de-DE')) + '</td><td>' + esc(p.benutzer) + '</td><td>' + esc(p.aktion) + '</td><td class="code">' + esc(p.retoureId || '') +
           '</td><td class="code">' + esc(p.positionId || '') + '</td><td>' + esc(p.zustand || '') + '</td><td>' + esc(p.ergebnis || '') + (p.meldung ? ': ' + esc(p.meldung) : '') + '</td></tr>';
       }).join('');
-    }).catch(function (err) { fehler('zw-error', err.message); });
+    }).catch(function (err) { if (!still) fehler('zw-error', err.message); });
   }
 
+  // Seitenleiste der ZW-Artikel: Filter mit Anzahl
+  var ZW_FILTER = [['offen', 'Bestand noch nicht gebucht'], ['gebucht', 'Bestand gebucht'], ['alle', 'Alle']];
+  function zeigeZwFilter() {
+    var l = zustand.zwListe, n = { offen: 0, gebucht: 0, alle: l.length };
+    l.forEach(function (z) { n[z.bestandGebucht ? 'gebucht' : 'offen']++; });
+    $('n-zw').textContent = n.offen ? ' ' + n.offen : '';
+    $('zw-filter').innerHTML = ZW_FILTER.map(function (f) {
+      return '<button type="button" class="side-item filter" data-filter="' + f[0] + '" aria-current="' + (zustand.zwFilter === f[0]) + '"><span>' + esc(f[1]) + '</span><span class="anzahl">' + n[f[0]] + '</span></button>';
+    }).join('');
+  }
+  $('zw-filter').addEventListener('click', function (e) {
+    var b = e.target.closest('[data-filter]'); if (!b) return;
+    zustand.zwFilter = b.dataset.filter;
+    zeigeZwListe();
+  });
+
   function gefiltert() {
-    var f = $('zw-filter').value;
+    var f = zustand.zwFilter;
     var such = $('zw-suche').value.trim().toLowerCase();
     return zustand.zwListe.filter(function (z) {
       if (f === 'offen' && z.bestandGebucht) return false;
@@ -675,6 +798,7 @@ td .gebucht { color: var(--ok); font-weight: 600; }
   }
 
   function zeigeZwListe() {
+    zeigeZwFilter();
     var liste = gefiltert();
     $('zw-liste').innerHTML = liste.map(function (z) {
       var bestand = z.bestandGebucht
@@ -686,7 +810,6 @@ td .gebucht { color: var(--ok); font-weight: 600; }
     }).join('') || '<tr><td colspan="11">' + (zustand.zwListe.length ? 'Keine Einträge für diesen Filter.' : 'Noch keine Einträge.') + '</td></tr>';
   }
   $('zw-suche').addEventListener('input', zeigeZwListe);
-  $('zw-filter').addEventListener('change', zeigeZwListe);
 
   $('zw-liste').addEventListener('click', function (e) {
     var b = e.target.closest('button[data-id]'); if (!b) return;
@@ -723,7 +846,7 @@ td .gebucht { color: var(--ok); font-weight: 600; }
 
   $('reset').addEventListener('click', function () {
     if (!confirm('Probelauf wirklich zurücksetzen? Entscheidungen, Protokoll und ZW-Liste werden geleert.')) return;
-    api('zuruecksetzen', { body: {} }).then(function () { setTimeout(ladeListe, 1500); }).catch(function (err) { alert(err.message); });
+    api('zuruecksetzen', { body: {} }).then(function () { zustand.retoure = null; zeige(zustand.tab); setTimeout(function () { ladeListe(); ladeZwListe(); }, 1500); }).catch(function (err) { alert(err.message); });
   });
 
   // ---------- Start ----------
