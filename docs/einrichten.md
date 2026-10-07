@@ -24,11 +24,10 @@ gegen „Gmail → Send“ bzw. „Microsoft Outlook → Send“ aus.
 Wichtig: Nur diese **Produktions-Adresse** (`/webhook/…`) benutzen, nicht die Test-Adresse (`/webhook-test/…`).
 n8n speichert den Stand (Protokoll, offene Freigaben) nur bei Produktionsläufen.
 
-## 4. Geheimschlüssel und Zugänge erzeugen
+## 4. Zugänge erzeugen
 
 Auf der Seite **Zugang einrichten (für Tobias)** öffnen. Alles läuft nur im Browser, Passwörter werden nicht gesendet.
 
-- **Geheimschlüssel erzeugen** → den Text kopieren.
 - Pro Person: Benutzername, Anzeigename, Passwort (mindestens 10 Zeichen) → **Eintrag erzeugen** → die Zeile kopieren.
   Für dich selbst „Admin“ anhaken (darf den Probelauf zurücksetzen).
 
@@ -40,7 +39,7 @@ Doppelklick auf **Einstellungen**:
 |---|---|
 | `einstellungen.freigabeAn` | E-Mail-Adresse, an die die Freigabe-Mails gehen |
 | `einstellungen.absender` | Absender der Mails (muss zum E-Mail-Zugang passen) |
-| `einstellungen.geheimSchluessel` | Geheimschlüssel aus Schritt 4 (mindestens 32 Zeichen) |
+| `einstellungen.geheimSchluessel` | **leer lassen.** Der Workflow erzeugt beim ersten Aufruf selbst einen und behält ihn. Nur füllen, falls die Seite das ausdrücklich verlangt |
 | `einstellungen.benutzer` | Liste der Zugänge in eckigen Klammern, mit Komma getrennt: `[{"benutzer":"tobias",…},{"benutzer":"lager1",…}]` |
 | `einstellungen.abschlag…` | Prozente der Preisregel. Nur ändern, wenn sich die Regel ändert |
 | `einstellungen.statusOffen` / `statusFertig` | Retouren-Status 9.1.1 und 9.3 |
@@ -66,6 +65,12 @@ Die Freigabe-Mail enthält einen Link zu einer Seite mit **Freigeben** und **Abl
 - Nachgestellt: neue Varianten-ID, Bestand +1, Kommentar in der Retoure, Status 9.3, Zeile in der ZW-Liste, Protokoll.
 - Fehler (z. B. Original fehlt in Shopware, Mail nicht gesendet) als Kommentar in der Retoure. Die Position kann neu angelegt werden.
 - Admins können den Probelauf unter „ZW-Liste und Protokoll“ zurücksetzen.
+
+## Datenschutz
+
+- In den Workflow-Einstellungen muss „Save successful production executions“ auf **Do not save** stehen.
+  Sonst speichert n8n bei jeder Anmeldung das Passwort im Klartext unter Executions. Beim Import geht diese Einstellung verloren.
+- Zugangsdaten, Hashes und Schlüssel nie in Chat, Notion oder Repo kopieren.
 
 ## Bekannte Grenzen des Probelaufs
 

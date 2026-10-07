@@ -69,12 +69,27 @@ test('Schlüssel einer später gesperrten Person gilt nicht mehr', () => {
   assert.equal(rufe('retouren', { schluessel: s }).status, 401);
 });
 
-test('ohne Geheimschlüssel klare Fehlermeldung', () => {
+test('ohne eingetragenen Geheimschlüssel wird einer erzeugt und behalten', () => {
+  const { k, rufe, anmelden } = aufbau();
+  k.einstellungen.geheimSchluessel = '';
+  const s = anmelden('lager1', 'Passwort-Lager1');
+  assert.ok(s);
+  assert.match(k.speicher.geheimnis, /^[0-9a-f]{64}$/);
+  const gemerkt = k.speicher.geheimnis;
+  assert.equal(rufe('retouren', { schluessel: s }).status, 200, 'Schlüssel gilt auch beim nächsten Aufruf');
+  const chef = anmelden('chef', 'Passwort-Chef1');
+  rufe('zuruecksetzen', { schluessel: chef, body: {} });
+  assert.equal(k.speicher.geheimnis, gemerkt, 'Zurücksetzen behält den Geheimschlüssel');
+  assert.equal(rufe('retouren', { schluessel: s }).status, 200);
+});
+
+test('ohne sichere Zufallsquelle klare Fehlermeldung', () => {
   const { k, rufe } = aufbau();
   k.einstellungen.geheimSchluessel = '';
+  k.zufall = () => null;
   const r = rufe('anmelden', { body: { benutzer: 'lager1', passwort: 'Passwort-Lager1' } });
   assert.equal(r.status, 500);
-  assert.match(r.daten.fehler, /geheimSchluessel/);
+  assert.match(r.daten.fehler, /geheimSchluessel setzen/);
 });
 
 test('Retouren-Liste und Vorschau mit den Prüfbeispielen', () => {

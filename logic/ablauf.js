@@ -24,9 +24,9 @@ function zwVerarbeiten(anfrage, k) {
 }
 
 function zwAktion(anfrage, k) {
-  const e = k.einstellungen || {};
   const speicher = k.speicher;
   speicherVorbereiten(speicher, k.beispieldaten);
+  const e = Object.assign({}, k.einstellungen || {}, { geheimSchluessel: geheimSchluesselBestimmen(k.einstellungen || {}, speicher, k.zufall) });
   const pfad = String(anfrage.url || '').split('?')[0].replace(/\/+$/, '');
   const aktion = pfad.slice(pfad.lastIndexOf('/') + 1);
   const q = anfrage.query || {};
@@ -61,7 +61,7 @@ function zwAktion(anfrage, k) {
       return json(200, { ok: true, zwListe: speicher.zwListe.slice(-100).reverse(), protokoll: speicher.protokoll.slice(-50).reverse() });
     case 'zuruecksetzen':
       if (person.rolle !== 'admin') return json(403, { ok: false, fehler: 'Nur für Admins.' });
-      for (const s of Object.keys(speicher)) if (s !== 'fehlversuche') delete speicher[s];
+      for (const s of Object.keys(speicher)) if (s !== 'fehlversuche' && s !== 'geheimnis') delete speicher[s];
       speicherVorbereiten(speicher, k.beispieldaten);
       return json(200, { ok: true });
   }
@@ -123,9 +123,32 @@ function speicherVorbereiten(speicher, beispieldaten) {
   if (!speicher.fehlversuche) speicher.fehlversuche = {};
 }
 
+// Geheimschlüssel: aus „Einstellungen“, falls dort gesetzt. Sonst einmalig zufällig erzeugen
+// und im Speicher des Workflows behalten. So muss niemand einen Schlüssel von Hand kopieren.
+function geheimSchluesselBestimmen(e, speicher, zufall) {
+  const eingetragen = String(e.geheimSchluessel || '').trim();
+  if (eingetragen.length >= 32) return eingetragen;
+  if (!speicher.geheimnis) {
+    const neu = (zufall || zufallsHex)();
+    if (!neu || neu.length < 64) return '';
+    speicher.geheimnis = neu;
+  }
+  return speicher.geheimnis;
+}
+
+// 32 zufällige Bytes als Hex, aus einer sicheren Quelle. Gibt null zurück, wenn keine da ist.
+function zufallsHex() {
+  try { return require('crypto').randomBytes(32).toString('hex'); } catch (err) { /* weiter */ }
+  try {
+    const b = new Uint8Array(32);
+    globalThis.crypto.getRandomValues(b);
+    return Array.from(b, (x) => (x < 16 ? '0' : '') + x.toString(16)).join('');
+  } catch (err) { return null; }
+}
+
 function geheimnis(e) {
   const g = String(e.geheimSchluessel || '').trim();
-  if (g.length < 32) abbrechen(500, 'Einstellungen: geheimSchluessel fehlt oder ist zu kurz (mindestens 32 Zeichen).');
+  if (g.length < 32) abbrechen(500, 'Kein Geheimschlüssel: n8n liefert hier keine sicheren Zufallszahlen. Bitte in Einstellungen geheimSchluessel setzen (mindestens 32 Zeichen).');
   return g;
 }
 
