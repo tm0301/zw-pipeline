@@ -1,0 +1,10 @@
+{
+  "name": "zw-pipeline",
+  "private": true,
+  "description": "Zweite-Wahl-Artikel aus Retouren automatisch in plentymarkets und Shopware anlegen (n8n + ZW-Station)",
+  "scripts": {
+    "test": "node --test logic/*.test.js",
+    "bauen": "node n8n/bauen.mjs"
+  },
+  "engines": { "node": ">=22" }
+}
