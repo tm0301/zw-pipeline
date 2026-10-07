@@ -20,9 +20,42 @@ function fuerN8n(quelle) {
 }
 
 const logik = ['logic/zw-logik.js', 'logic/anmeldung.js', 'logic/quellen.js', 'logic/ablauf.js'].map((p) => fuerN8n(lies(p))).join('\n');
-// Kleinere Bausteine brauchen nur einen Teil: Runde B nur Abfragen und Ablauf, Mailergebnis nur den Ablauf.
-const nurQuellenUndAblauf = ['logic/quellen.js', 'logic/ablauf.js'].map((p) => fuerN8n(lies(p))).join('\n');
-const nurAblauf = fuerN8n(lies('logic/ablauf.js'));
+
+// Die kleinen Bausteine (Vorbereiten, Runde B planen, Mailergebnis) bekommen nur die Teile, die sie brauchen:
+// ausgehend von der Einstiegsfunktion alle Funktionen und Konstanten, die darin vorkommen (und deren Teile).
+function teile(quelle) {
+  const stuecke = [];
+  let kommentar = [];
+  for (const zeile of quelle.split('\n')) {
+    const m = zeile.match(/^(?:function\s+([A-Za-z_$][\w$]*)|const\s+([A-Za-z_$][\w$]*)\s*=)/);
+    if (m) {
+      stuecke.push({ name: m[1] || m[2], zeilen: kommentar.concat([zeile]) });
+      kommentar = [];
+    } else if (/^\/\//.test(zeile) || zeile.trim() === '') {
+      kommentar.push(zeile);
+    } else if (stuecke.length) {
+      const letztes = stuecke[stuecke.length - 1];
+      letztes.zeilen.push(...kommentar, zeile);
+      kommentar = [];
+    }
+  }
+  return stuecke.map((x) => ({ name: x.name, text: x.zeilen.join('\n').replace(/^\n+/, '').replace(/\n+$/, '') }));
+}
+const alleTeile = teile(logik);
+function nurNoetig(einstieg) {
+  const namen = new Set(alleTeile.map((x) => x.name));
+  const noetig = new Set();
+  const offen = [...einstieg];
+  while (offen.length) {
+    const name = offen.pop();
+    if (noetig.has(name)) continue;
+    noetig.add(name);
+    const t = alleTeile.find((x) => x.name === name);
+    const ohneTexte = t.text.replace(/\/\/.*$/gm, '').replace(/'(?:[^'\\\n]|\\.)*'/g, "''");
+    for (const w of ohneTexte.match(/[A-Za-z_$][\w$]*/g) || []) if (namen.has(w) && !noetig.has(w)) offen.push(w);
+  }
+  return alleTeile.filter((x) => noetig.has(x.name)).map((x) => x.text).join('\n\n') + '\n';
+}
 const seite = lies('frontend/zw-station.html');
 const version = createHash('sha256').update(logik + seite).digest('hex').slice(0, 10);
 
@@ -36,7 +69,7 @@ const SHOPWARE_SUCHE = 'https://mykitchens.de/api/search/product';
 
 const ANFRAGE = '{ url: anfrage.webhookUrl, query: anfrage.query, body: anfrage.body, headers: anfrage.headers }';
 
-const codeVorbereiten = KOPF + logik + '\n' +
+const codeVorbereiten = KOPF + nurNoetig(['zwVorbereiten']) + '\n' +
   '// ---------- Aufruf durch n8n: Welche Daten braucht diese Anfrage? ----------\n' +
   'const anfrage = $input.first().json;\n' +
   'const plan = zwVorbereiten(' + ANFRAGE + ', {\n' +
@@ -44,7 +77,7 @@ const codeVorbereiten = KOPF + logik + '\n' +
   '});\n' +
   'return [{ json: plan }];\n';
 
-const codeRundeB = KOPF + nurQuellenUndAblauf + '\n' +
+const codeRundeB = KOPF + nurNoetig(['zwRundeB']) + '\n' +
   '// ---------- Aufruf durch n8n: Abfragen für plenty Runde B ----------\n' +
   'const plan = $(\'Vorbereiten\').first().json.plan;\n' +
   'return [{ json: { plenty: zwRundeB(plan, $input.all().map((i) => i.json)) } }];\n';
@@ -75,7 +108,7 @@ const codeMailsAufteilen = KOPF +
   'const mails = $input.first().json.mails || [];\n' +
   'return mails.map((m) => ({ json: m }));\n';
 
-const codeMailergebnis = KOPF + nurAblauf + '\n' +
+const codeMailergebnis = KOPF + nurNoetig(['zwNachMailversand']) + '\n' +
   '// Mails, die nicht rausgingen, als Fehler vermerken (das Lager kann neu anlegen). Danach antwortet „Antwort senden“.\n' +
   'const antwort = zwNachMailversand(\n' +
   '  $(\'ZW-Logik\').first().json,\n' +
