@@ -34,7 +34,11 @@ const codeLogik = KOPF +
   'const anfrage = $input.first().json;\n' +
   'const antwort = zwVerarbeiten(\n' +
   '  { url: anfrage.webhookUrl, query: anfrage.query, body: anfrage.body, headers: anfrage.headers },\n' +
-  '  { einstellungen: anfrage.einstellungen || {}, speicher: $getWorkflowStaticData(\'global\'), jetzt: Date.now(), seiteHtml: SEITE_HTML, beispieldaten: BEISPIELDATEN },\n' +
+  '  {\n' +
+  '    einstellungen: anfrage.einstellungen || {}, speicher: $getWorkflowStaticData(\'global\'), jetzt: Date.now(),\n' +
+  '    seiteHtml: SEITE_HTML, beispieldaten: BEISPIELDATEN,\n' +
+  '    eigenerCode: () => { try { return $(\'ZW-Logik\').params.jsCode; } catch (err) { return null; } },\n' +
+  '  },\n' +
   ');\n' +
   'return [{ json: antwort }];\n';
 

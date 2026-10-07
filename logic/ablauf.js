@@ -7,7 +7,7 @@
 const {
   istZwZustand, istGueltigeEntscheidung, berechneZwPreis, zwBarcode, zwVariantennummer, zwName, zwKommentar, euro,
 } = require('./zw-logik.js');
-const { passwortPruefen, signatur, schluesselAusstellen, schluesselPruefen, gleich } = require('./anmeldung.js');
+const { passwortPruefen, signatur, schluesselAusstellen, schluesselPruefen, gleich, sha256, utf8, bytesZuHex } = require('./anmeldung.js');
 // NUR-NODE-ENDE
 
 const ERLEDIGT = ['angelegt', 'plus1', 'nicht_verkaufbar', 'kein_zw'];
@@ -34,6 +34,11 @@ function zwAktion(anfrage, k) {
 
   switch (aktion) {
     case 'zw-station':
+      if (q.pruefen === 'version') {
+        // Prüfsumme des Codes, der in n8n tatsächlich steht. Damit lässt sich ein Update überprüfen.
+        const quelle = typeof k.eigenerCode === 'function' ? k.eigenerCode() : null;
+        return json(200, { ok: true, codeSha256: quelle ? bytesZuHex(sha256(utf8(quelle))) : null });
+      }
       return { status: 200, contentType: 'text/html; charset=utf-8', body: k.seiteHtml };
 
     case 'anmelden':
@@ -44,6 +49,7 @@ function zwAktion(anfrage, k) {
 
     case 'freigabe-entscheiden':
       return freigabeEntscheiden(body, e, speicher, k.jetzt);
+
   }
 
   // Alle weiteren Aktionen nur mit gültigem Schlüssel
