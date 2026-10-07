@@ -11,7 +11,8 @@
 
 // NUR-NODE-ANFANG
 const {
-  istZwZustand, istGueltigeEntscheidung, berechneZwPreis, zwBarcode, zwVariantennummer, zwName, zwKommentar, euro,
+  istZwZustand, istGueltigeEntscheidung, grundPflicht, ZW_GRUND_MAX, berechneZwPreis, zwPreisWarnungen, lagerPreisLesen,
+  zwBarcode, zwVariantennummer, zwName, zwKommentar, euro,
 } = require('./zw-logik.js');
 const { passwortPruefen, signatur, schluesselAusstellen, schluesselPruefen, gleich, sha256, utf8, bytesZuHex } = require('./anmeldung.js');
 const {
@@ -337,9 +338,15 @@ function retourenListe(speicher, d) {
     const id = String(auftrag.id);
     return Object.assign({
       id, datum: String(auftrag.createdAt || '').slice(0, 10), shopAuftrag: shopAuftrag(auftrag), anzahl: positionen.length,
-      probelaufFertig: !!speicher.retourenFertig[id],
+      probelaufFertig: !!speicher.retourenFertig[id], probelaufStatus: fertigStatus(speicher, id),
     }, zaehlen(speicher, positionen.map((p) => p.positionId)));
   });
+}
+
+// Status, auf den die Retoure im Echtbetrieb gesetzt würde (im Probelauf nur vermerkt).
+function fertigStatus(speicher, id) {
+  const f = speicher.retourenFertig[id];
+  return f && typeof f === 'object' ? f.status : null;
 }
 
 function retoureMerken(speicher, id, eintrag) {
@@ -368,7 +375,7 @@ function retoureDetail(speicher, nr, d, jetzt) {
   retoureMerken(speicher, id, { positionIds: positionen.map((p) => p.positionId), shopAuftrag: shopAuftrag(auftrag), datum: String(auftrag.createdAt || '').slice(0, 10), gemerkt: new Date(jetzt).toISOString() });
   return {
     id, shopAuftrag: shopAuftrag(auftrag), datum: String(auftrag.createdAt || '').slice(0, 10), status: auftrag.statusName || String(auftrag.statusId),
-    probelaufFertig: !!speicher.retourenFertig[id],
+    probelaufFertig: !!speicher.retourenFertig[id], probelaufStatus: fertigStatus(speicher, id),
     plentyKommentare: eintraege(d.a[1]).map((c) => ({ zeit: c.createdAt, text: textOhneHtml(c.text) })).filter((c) => c.text),
     kommentare: speicher.kommentare[id] || [],
     positionen: positionen.map((p) => Object.assign({
@@ -410,6 +417,10 @@ function vorschauPosition(speicher, positionId, zustand, e, quellen) {
   } catch (err) {
     return Object.assign(basis, { fehler: err.message });
   }
+  // Warnungen, die nicht vom Preis abhängen (bleiben, wenn das Lager den Preis ändert)
+  const preisWarnungen = zwPreisWarnungen(preis.preis, { einkaufspreis: sw.einkaufspreis, streichpreis: preis.streichpreis });
+  const regelWarnungen = preis.warnungen.filter((w) => !preisWarnungen.includes(w))
+    .concat(pos.modell ? [] : ['Modell fehlt in plenty. Variantennummer wird aus dem Namen gebildet.']);
   // Gibt es den ZW-Artikel schon? Echt in plenty (Barcode) oder im Probelauf nachgestellt.
   const echt = (quellen.barcodes[barcode] || [])[0];
   const sim = speicher.sim.zwArtikel[barcode];
@@ -425,23 +436,42 @@ function vorschauPosition(speicher, positionId, zustand, e, quellen) {
     name: zwName(sw.name),
     variantennummer: zwVariantennummer(pos.modell || sw.name),
     preis: preis.preis,
+    empfehlung: preis.preis,
+    preisVomLager: false,
     streichpreis: preis.streichpreis,
     mindestpreis: sw.mindestpreis,
+    einkaufspreis: sw.einkaufspreis,
     fall: preis.fall,
     abschlag: preis.abschlag,
     neu: !vorhanden,
     bestehendeVarianteId: vorhanden ? vorhanden.varianteId : null,
     bestehendSimuliert: vorhanden ? vorhanden.simuliert : false,
-    warnungen: preis.warnungen.concat(pos.modell ? [] : ['Modell fehlt in plenty. Variantennummer wird aus dem Namen gebildet.']),
+    regelWarnungen,
+    warnungen: regelWarnungen.concat(preisWarnungen),
+    nichtUebernehmen: sw.nichtUebernehmen || [],
     hinweise,
   });
+}
+
+// Das Lager darf den Preis ändern. Die berechnete Empfehlung bleibt zum Vergleich erhalten.
+function preisSetzen(v, preis) {
+  if (preis === null || preis === undefined) return v;
+  v.preis = preis;
+  v.preisVomLager = preis !== v.empfehlung;
+  v.warnungen = v.regelWarnungen.concat(zwPreisWarnungen(preis, { einkaufspreis: v.einkaufspreis, streichpreis: v.streichpreis }));
+  return v;
 }
 
 function entscheidungenLesen(body) {
   const liste = Array.isArray(body.entscheidungen) ? body.entscheidungen : [];
   if (!liste.length) abbrechen(400, 'Keine Positionen übergeben.');
   if (liste.length > 50) abbrechen(400, 'Zu viele Positionen auf einmal.');
-  return liste.map((x) => ({ positionId: String(x.positionId || ''), zustand: String(x.zustand || '') }));
+  return liste.map((x) => ({
+    positionId: String(x.positionId || ''),
+    zustand: String(x.zustand || ''),
+    grund: String(x.grund || '').replace(/\s+/g, ' ').trim().slice(0, ZW_GRUND_MAX),
+    preis: x.preis,
+  }));
 }
 
 function vorschauListe(speicher, body, e, quellen) {
@@ -456,10 +486,24 @@ function anlegen(speicher, body, e, person, jetzt, url, quellen) {
   const g = geheimnis(e);
   const basisUrl = String(e.seitenAdresse || '').trim().replace(/\/+$/, '') ||
     String(url || '').split('?')[0].replace(/\/anlegen\/?$/, '');
+  const bueroAn = String(e.bueroAn || '').trim() || freigabeAn;
   const ergebnisse = [];
   const mails = [];
+  const liste = entscheidungenLesen(body);
 
-  for (const x of entscheidungenLesen(body)) {
+  // Erst alles prüfen, dann ändern: fehlt ein Grund oder ist ein Preis ungültig, wird nichts angelegt.
+  for (const x of liste) {
+    const bisher = positionsStatus(speicher, x.positionId);
+    if (bisher.status === 'wartet' || ERLEDIGT.includes(bisher.status)) continue;
+    if (grundPflicht(x.zustand) && !x.grund) abbrechen(400, 'Bitte bei „' + x.zustand + '“ einen Grund angeben (Position ' + x.positionId + ').');
+    try {
+      x.lagerPreis = istZwZustand(x.zustand) ? lagerPreisLesen(x.preis) : null;
+    } catch (err) {
+      abbrechen(400, 'Position ' + x.positionId + ': ' + err.message);
+    }
+  }
+
+  for (const x of liste) {
     const bisher = positionsStatus(speicher, x.positionId);
     if (bisher.status === 'wartet' || ERLEDIGT.includes(bisher.status)) {
       ergebnisse.push(Object.assign({ positionId: x.positionId, hinweis: 'Schon entschieden, nichts geändert.' }, bisher));
@@ -467,7 +511,7 @@ function anlegen(speicher, body, e, person, jetzt, url, quellen) {
     }
     const v = vorschauPosition(speicher, x.positionId, x.zustand, e, quellen);
     const pos = speicher.cache.positionen[x.positionId];
-    const gemeinsam = { zustand: x.zustand, von: person.benutzer, retoureId: pos ? pos.retoureId : null, aktualisiert: new Date(jetzt).toISOString() };
+    const gemeinsam = { zustand: x.zustand, grund: x.grund, von: person.benutzer, retoureId: pos ? pos.retoureId : null, aktualisiert: new Date(jetzt).toISOString() };
 
     if (v.fehler) {
       if (!pos) { ergebnisse.push({ positionId: x.positionId, status: 'fehler', meldung: v.fehler }); continue; }
@@ -481,15 +525,19 @@ function anlegen(speicher, body, e, person, jetzt, url, quellen) {
 
     if (!v.artikel) {
       const status = x.zustand === 'Kein ZW' ? 'kein_zw' : 'nicht_verkaufbar';
-      const st = Object.assign({ status, meldung: v.kommentar }, gemeinsam);
+      const kommentar = zwKommentar({ zustand: x.zustand, grund: x.grund });
+      const st = Object.assign({ status, meldung: kommentar }, gemeinsam);
       speicher.positionen[x.positionId] = st;
-      kommentarSim(speicher, pos.retoureId, gemeinsam.aktualisiert, v.kommentar + ' (' + x.positionId + ')');
-      protokollieren(speicher, jetzt, { benutzer: person.benutzer, aktion: 'entscheidung', retoureId: pos.retoureId, positionId: x.positionId, zustand: x.zustand, ergebnis: status });
+      kommentarSim(speicher, pos.retoureId, gemeinsam.aktualisiert, kommentar + ' (' + x.positionId + ')');
+      protokollieren(speicher, jetzt, { benutzer: person.benutzer, aktion: 'entscheidung', retoureId: pos.retoureId, positionId: x.positionId, zustand: x.zustand, ergebnis: status, meldung: x.grund || undefined });
       retoureAbschliessenWennFertig(speicher, pos.retoureId, jetzt, e);
+      if (status === 'nicht_verkaufbar') mails.push(bueroMail(speicher, pos, x, person, e, bueroAn));
       ergebnisse.push(Object.assign({ positionId: x.positionId }, st));
       continue;
     }
 
+    v.grund = x.grund;
+    preisSetzen(v, x.lagerPreis);
     const versuch = (bisher.versuch || 0) + 1;
     const st = Object.assign({ status: 'wartet', versuch, vorschau: v }, gemeinsam);
     speicher.positionen[x.positionId] = st;
@@ -526,17 +574,41 @@ function freigabeMail(speicher, v, person, versuch, basisUrl, g, e, an) {
   };
 }
 
+// Info ans Büro bei „Nicht verkaufbar“. Keine Freigabe nötig.
+function bueroMail(speicher, pos, x, person, e, an) {
+  const z = [
+    ['Retoure', retoureText(speicher, pos.retoureId)],
+    ['Artikel', pos.name],
+    ['Original', 'Variante ' + pos.varianteId + (pos.ean ? ' · EAN ' + pos.ean : '')],
+    ['Entscheidung', 'Nicht verkaufbar'],
+    ['Grund', x.grund],
+    ['Gemeldet von', person.name],
+  ];
+  return {
+    positionId: x.positionId,
+    art: 'info',
+    an,
+    von: String(e.absender || an),
+    betreff: 'ZW: Nicht verkaufbar · ' + pos.name + ' · Retoure ' + pos.retoureId,
+    html: '<p>Das Lager hat einen Artikel als <b>nicht verkaufbar</b> gemeldet. Bitte weiter bearbeiten.</p>' +
+      '<table cellpadding="6" style="border-collapse:collapse">' + z.map((r) => '<tr><td>' + esc(r[0]) + '</td><td><b>' + esc(r[1]) + '</b></td></tr>').join('') + '</table>' +
+      '<p>Sind alle Positionen der Retoure entschieden, geht sie auf Status ' + esc(String(e.statusNichtVerkaufbar || '9.1.3')) + ' (Reklamieren). <b>Probelauf:</b> In plenty wird noch nichts geändert.</p>',
+  };
+}
+
 function vorschauZeilen(speicher, v) {
   const z = [
     ['Retoure', retoureText(speicher, v.retoureId)],
     ['Artikel', v.name],
     ['Original', 'Variante ' + v.originalVarianteId + ' · EAN ' + v.ean],
     ['Zustand', v.zustand],
+    ['Grund', v.grund || '–'],
     ['Barcode', v.barcode],
-    ['Preis', euro(v.preis) + ' (Streichpreis ' + euro(v.streichpreis) + ')'],
+    ['Preis', euro(v.preis) + (v.preisVomLager ? ' (vom Lager geändert, Empfehlung ' + euro(v.empfehlung) + ')' : ' (Empfehlung)') + ', Streichpreis ' + euro(v.streichpreis)],
     ['Preisregel', v.fall === 'normal' ? 'Mindestpreis ' + euro(v.mindestpreis) + ' − ' + v.abschlag + ' %' : (v.fall === 'a' ? 'Mindestpreis erreicht' : 'Mindestpreis leer') + ': jetziger Preis − ' + v.abschlag + ' %'],
     ['Ergebnis', v.neu ? 'Neuer ZW-Artikel' : 'Bestand +1 auf ' + v.bestehendeVarianteId + (v.bestehendSimuliert ? ' (Probelauf)' : '')],
   ];
+  if ((v.nichtUebernehmen || []).length) z.push(['Nicht übernehmen', v.nichtUebernehmen.join(', ')]);
   return z.map((r) => '<tr><td>' + esc(r[0]) + '</td><td><b>' + esc(r[1]) + '</b></td></tr>').join('');
 }
 
@@ -609,11 +681,12 @@ function freigabeEntscheiden(body, e, speicher, jetzt) {
     sim.zwArtikel[v.barcode] = zw;
     varianteId = zw.varianteId;
   }
-  const kommentar = zwKommentar({ zustand: v.zustand, varianteId, plus1 });
+  const kommentar = zwKommentar({ zustand: v.zustand, varianteId, plus1, grund: v.grund });
   kommentarSim(speicher, retoureId, zeit, kommentar);
   speicher.zwListe.push({
     id: 'Z' + (sim.naechsteZeile++), datum: zeit.slice(0, 10), retoureId, originalVarianteId: v.originalVarianteId,
-    zwVarianteId: varianteId, barcode: v.barcode, name: v.name, zustand: v.zustand, preis: v.preis, streichpreis: v.streichpreis,
+    zwVarianteId: varianteId, barcode: v.barcode, name: v.name, zustand: v.zustand, grund: v.grund || '',
+    preis: v.preis, empfehlung: v.empfehlung, preisVomLager: !!v.preisVomLager, streichpreis: v.streichpreis,
     neuOderPlus1: plus1 ? '+1' : 'neu', freigegebenVon: von, probelauf: true, bestandGebucht: false, gebuchtVon: null, gebuchtAm: null,
   });
   speicher.positionen[f.positionId] = Object.assign({}, f.st, {
@@ -629,9 +702,12 @@ function retoureAbschliessenWennFertig(speicher, retoureId, jetzt, e) {
   if (!r || !r.positionIds.length) return;
   const fertig = r.positionIds.every((p) => ERLEDIGT.includes(positionsStatus(speicher, p).status));
   if (fertig && !speicher.retourenFertig[retoureId]) {
-    const status = String(e.statusFertig || '9.3');
-    speicher.retourenFertig[retoureId] = new Date(jetzt).toISOString();
-    kommentarSim(speicher, retoureId, new Date(jetzt).toISOString(), 'Alle Positionen entschieden, Status ' + status + ' (Probelauf: nicht gesetzt)');
+    // Ist eine Position nicht verkaufbar, geht die Retoure auf 9.1.3 (Reklamieren), sonst auf 9.3.
+    const nichtVerkaufbar = r.positionIds.some((p) => positionsStatus(speicher, p).status === 'nicht_verkaufbar');
+    const status = nichtVerkaufbar ? String(e.statusNichtVerkaufbar || '9.1.3') : String(e.statusFertig || '9.3');
+    speicher.retourenFertig[retoureId] = { zeit: new Date(jetzt).toISOString(), status };
+    kommentarSim(speicher, retoureId, new Date(jetzt).toISOString(), 'Alle Positionen entschieden, Status ' + status +
+      (nichtVerkaufbar ? ' (Reklamieren, weil nicht verkaufbar)' : '') + ' (Probelauf: nicht gesetzt)');
     protokollieren(speicher, jetzt, { benutzer: 'automatisch', aktion: 'status', retoureId, ergebnis: status + ' (Probelauf)' });
   }
 }
@@ -660,8 +736,14 @@ function zwNachMailversand(antwort, gesendet, speicher, jetzt) {
     const r = gesendet[i];
     const fehler = !r ? 'keine Rückmeldung vom Mailversand' : (r.error ? (r.error.message || r.error) : null);
     if (!fehler) return;
-    zwMailfehler(speicher, m.positionId, String(fehler).slice(0, 300), jetzt);
     const eintrag = (inhalt.ergebnisse || []).find((x) => x.positionId === m.positionId);
+    if (m.art === 'info') {
+      // Info-Mail ans Büro: Die Entscheidung bleibt gültig, nur der Hinweis kommt nicht an.
+      protokollieren(speicher, jetzt, { benutzer: 'automatisch', aktion: 'buero-mail', positionId: m.positionId, ergebnis: 'fehler', meldung: String(fehler).slice(0, 300) });
+      if (eintrag) eintrag.hinweis = 'Info-Mail ans Büro nicht gesendet. Bitte das Büro selbst informieren.';
+      return;
+    }
+    zwMailfehler(speicher, m.positionId, String(fehler).slice(0, 300), jetzt);
     if (eintrag) Object.assign(eintrag, speicher.positionen[m.positionId]);
   });
   return { status: antwort.status, contentType: antwort.contentType, body: JSON.stringify(inhalt) };

@@ -154,6 +154,8 @@ const EINSTELLUNGEN = [
   ['benutzer', 'string', '[]'],
   ['anmeldungMinuten', 'number', 600],
   ['seitenAdresse', 'string', ''],
+  ['bueroAn', 'string', ''],
+  ['statusNichtVerkaufbar', 'string', '9.1.3'],
 ];
 
 const nodes = [];

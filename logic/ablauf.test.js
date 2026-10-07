@@ -45,7 +45,8 @@ const SHOPWARE = [
   {
     id: 'a1', productNumber: '772160', name: 'Miele H 2861-1 B 125 Edition Einbau-Backofen Edelstahl/CleanSteel', ean: '4002516769965',
     price: [{ currencyId: 'x', gross: 1149, net: 965.55, listPrice: { gross: 1299 } }], purchasePrices: [{ gross: 644.11 }],
-    customFields: { custom_price_minprice: 865 },
+    customFields: { custom_price_minprice: 865, dvsn_product_option_product_option_1: 'abc' },
+    categoryIds: ['kat-backofen', '019f13061667716a9525667c2acb4d56'], tagIds: ['019c75c6b03378f4bb6bb46085c38bdc'],
   },
   {
     id: 'a2', productNumber: '772162', name: 'Siemens iQ500 Geschirrspüler', ean: '4242003000002',
@@ -92,7 +93,7 @@ function aufbau() {
   const einstellungen = {
     abschlagNeuwertig: 0, abschlagSehrGut: 5, abschlagGut: 10, abschlagNeuwertigSonderfall: 2,
     statusOffen: '9.1.1', statusFertig: '9.3',
-    freigabeAn: 'tobias@example.com', geheimSchluessel: 'x'.repeat(64),
+    freigabeAn: 'tobias@example.com', bueroAn: 'buero@example.com', geheimSchluessel: 'x'.repeat(64),
     benutzer: JSON.stringify([
       { benutzer: 'lager1', name: 'Lager Eins', hash: hash('Passwort-Lager1'), rolle: 'lager' },
       { benutzer: 'chef', name: 'Tobias', hash: hash('Passwort-Chef1'), rolle: 'admin' },
@@ -260,13 +261,13 @@ test('Vorschau mit echten Preisen aus Shopware und vorhandenen ZW-Artikeln aus p
   abfragen.length = 0;
   const v = rufe('vorschau', { schluessel: s, body: { entscheidungen: [
     { positionId: '5001', zustand: 'Neuwertig' },
-    { positionId: '5001', zustand: 'Sehr gut' },
-    { positionId: '5102', zustand: 'Gut' },
-    { positionId: '5101', zustand: 'Gut' },
-    { positionId: '5103', zustand: 'Gut' },
+    { positionId: '5001', zustand: 'Sehr gut', grund: 'Kleine Delle hinten' },
+    { positionId: '5102', zustand: 'Gut', grund: 'Kratzer an der Seite' },
+    { positionId: '5101', zustand: 'Gut', grund: 'Kratzer an der Seite' },
+    { positionId: '5103', zustand: 'Gut', grund: 'Kratzer an der Seite' },
     { positionId: '5001', zustand: 'Kein ZW' },
     { positionId: '5001', zustand: 'Super' },
-    { positionId: '9999', zustand: 'Gut' },
+    { positionId: '9999', zustand: 'Gut', grund: 'Kratzer an der Seite' },
   ] } }).daten.vorschau;
   assert.equal(v[0].preis, 864.99); assert.equal(v[0].fall, 'normal'); assert.equal(v[0].neu, true);
   assert.equal(v[0].streichpreis, 1149);
@@ -295,20 +296,26 @@ test('kompletter Durchlauf: anlegen, Mail, freigeben, +1, ablehnen, fertig', () 
 
   const a = rufe('anlegen', { schluessel: s, body: { entscheidungen: [
     { positionId: '5101', zustand: 'Kein ZW' },
-    { positionId: '5102', zustand: 'Gut' },
-    { positionId: '5103', zustand: 'Nicht verkaufbar' },
+    { positionId: '5102', zustand: 'Gut', grund: 'Kratzer an der Seite' },
+    { positionId: '5103', zustand: 'Nicht verkaufbar', grund: 'Glasfront gebrochen' },
   ] } });
   assert.equal(a.status, 200);
   assert.deepEqual(a.daten.ergebnisse.map((e) => e.status), ['kein_zw', 'wartet', 'nicht_verkaufbar']);
-  assert.equal(a.mails.length, 1);
+  assert.equal(a.mails.length, 2, 'Freigabe-Mail für 5102, Info ans Büro für 5103');
   assert.equal(a.mails[0].an, 'tobias@example.com');
   assert.match(a.mails[0].betreff, /Retoure 241900/);
   assert.match(a.mails[0].html, /241900 · MK91002/);
+  assert.match(a.mails[0].html, /Kratzer an der Seite/);
+  assert.equal(a.mails[1].art, 'info');
+  assert.equal(a.mails[1].an, 'buero@example.com');
+  assert.match(a.mails[1].betreff, /Nicht verkaufbar/);
+  assert.match(a.mails[1].html, /Glasfront gebrochen/);
+  assert.match(a.mails[1].html, /9\.1\.3/);
   const q = link(a.mails[0]);
   assert.equal(q.p, '5102');
 
   // Doppelt anlegen ändert nichts
-  const doppelt = rufe('anlegen', { schluessel: s, body: { entscheidungen: [{ positionId: '5102', zustand: 'Gut' }] } });
+  const doppelt = rufe('anlegen', { schluessel: s, body: { entscheidungen: [{ positionId: '5102', zustand: 'Gut', grund: 'Kratzer an der Seite' }] } });
   assert.equal(doppelt.mails.length, 0);
   assert.match(doppelt.daten.ergebnisse[0].hinweis, /Schon entschieden/);
 
@@ -320,20 +327,21 @@ test('kompletter Durchlauf: anlegen, Mail, freigeben, +1, ablehnen, fertig', () 
 
   // Freigeben → nachgestellter ZW-Artikel SIM-1, Retoure fertig
   const f1 = rufe('freigabe-entscheiden', { body: Object.assign({}, q, { entscheidung: 'freigeben' }) });
-  assert.match(f1.body, /ZW angelegt: SIM-1 \(Gut\)/);
+  assert.match(f1.body, /ZW angelegt: SIM-1 \(Gut\)\. Grund: Kratzer an der Seite/);
   assert.match(rufe('freigabe-entscheiden', { body: Object.assign({}, q, { entscheidung: 'freigeben' }) }).body, /Schon entschieden/);
 
   const r = rufe('retoure', { schluessel: s, query: { nr: '241900' } }).daten.retoure;
   assert.deepEqual(r.positionen.map((p) => p.status), ['kein_zw', 'angelegt', 'nicht_verkaufbar']);
   assert.equal(r.probelaufFertig, true);
+  assert.equal(r.probelaufStatus, '9.1.3', 'eine Position nicht verkaufbar → Reklamieren');
   assert.deepEqual(r.kommentare.map((x) => x.text), [
     'Kein ZW (5101)',
-    'Nicht verkaufbar, an Büro (5103)',
-    'ZW angelegt: SIM-1 (Gut)',
-    'Alle Positionen entschieden, Status 9.3 (Probelauf: nicht gesetzt)',
+    'Nicht verkaufbar, an Büro. Grund: Glasfront gebrochen (5103)',
+    'ZW angelegt: SIM-1 (Gut). Grund: Kratzer an der Seite',
+    'Alle Positionen entschieden, Status 9.1.3 (Reklamieren, weil nicht verkaufbar) (Probelauf: nicht gesetzt)',
   ]);
   const liste = rufe('retouren', { schluessel: s }).daten.retouren;
-  assert.deepEqual(liste.map((x) => [x.id, x.probelaufFertig, x.erledigt]), [['241900', true, 3], ['241881', false, 0]]);
+  assert.deepEqual(liste.map((x) => [x.id, x.probelaufStatus, x.erledigt]), [['241900', '9.1.3', 3], ['241881', null, 0]]);
 
   // Retoure 241881: Sehr gut gibt es echt (788902) → +1, Ablehnen lässt die Position offen
   rufe('retoure', { schluessel: s, query: { nr: '241881' } });
@@ -342,17 +350,17 @@ test('kompletter Durchlauf: anlegen, Mail, freigeben, +1, ablehnen, fertig', () 
   let r2 = rufe('retoure', { schluessel: s, query: { nr: '241881' } }).daten.retoure;
   assert.equal(r2.positionen[0].status, 'abgelehnt');
   assert.equal(r2.probelaufFertig, false);
-  const p2 = rufe('anlegen', { schluessel: s, body: { entscheidungen: [{ positionId: '5001', zustand: 'Sehr gut' }] } });
+  const p2 = rufe('anlegen', { schluessel: s, body: { entscheidungen: [{ positionId: '5001', zustand: 'Sehr gut', grund: 'Kleine Delle hinten' }] } });
   assert.equal(p2.daten.ergebnisse[0].versuch, 2);
   assert.match(rufe('freigabe-entscheiden', { body: Object.assign({}, link(p2.mails[0]), { entscheidung: 'freigeben' }) }).body, /ZW \+1: 788902 \(Sehr gut\)/);
   r2 = rufe('retoure', { schluessel: s, query: { nr: '241881' } }).daten.retoure;
   assert.equal(r2.positionen[0].status, 'plus1');
-  assert.equal(r2.probelaufFertig, true);
+  assert.equal(r2.probelaufStatus, '9.3');
 
   // ZW-Liste und Protokoll
   const zl = rufe('zw-liste', { schluessel: s }).daten;
-  assert.deepEqual(zl.zwListe.map((z) => [z.id, z.zwVarianteId, z.neuOderPlus1, z.preis, z.bestandGebucht]), [
-    ['Z2', '788902', '+1', 820.99, false], ['Z1', 'SIM-1', 'neu', 988.99, false],
+  assert.deepEqual(zl.zwListe.map((z) => [z.id, z.zwVarianteId, z.neuOderPlus1, z.preis, z.bestandGebucht, z.grund]), [
+    ['Z2', '788902', '+1', 820.99, false, 'Kleine Delle hinten'], ['Z1', 'SIM-1', 'neu', 988.99, false, 'Kratzer an der Seite'],
   ]);
   assert.ok(zl.protokoll.some((x) => x.aktion === 'freigabe' && x.ergebnis === 'abgelehnt'));
   assert.ok(zl.protokoll.every((x) => x.zeit));
@@ -364,9 +372,9 @@ test('nachgestellter ZW-Artikel bekommt beim zweiten Mal +1', () => {
   const s = anmelden('lager1', 'Passwort-Lager1');
   rufe('retoure', { schluessel: s, query: { nr: '241881' } });
   rufe('retoure', { schluessel: s, query: { nr: '241900' } });
-  const a = rufe('anlegen', { schluessel: s, body: { entscheidungen: [{ positionId: '5001', zustand: 'Gut' }] } });
+  const a = rufe('anlegen', { schluessel: s, body: { entscheidungen: [{ positionId: '5001', zustand: 'Gut', grund: 'Kratzer an der Seite' }] } });
   rufe('freigabe-entscheiden', { body: Object.assign({}, link(a.mails[0]), { entscheidung: 'freigeben' }) });
-  const v = rufe('vorschau', { schluessel: s, body: { entscheidungen: [{ positionId: '5001', zustand: 'Gut' }] } }).daten.vorschau[0];
+  const v = rufe('vorschau', { schluessel: s, body: { entscheidungen: [{ positionId: '5001', zustand: 'Gut', grund: 'Kratzer an der Seite' }] } }).daten.vorschau[0];
   assert.equal(v.neu, false);
   assert.equal(v.bestehendeVarianteId, 'SIM-1');
   assert.equal(v.bestehendSimuliert, true);
@@ -376,7 +384,7 @@ test('ZW-Liste: Bestand gebucht setzen und zurücknehmen', () => {
   const { rufe, anmelden, link } = aufbau();
   const s = anmelden('lager1', 'Passwort-Lager1');
   rufe('retoure', { schluessel: s, query: { nr: '241881' } });
-  const a = rufe('anlegen', { schluessel: s, body: { entscheidungen: [{ positionId: '5001', zustand: 'Gut' }] } });
+  const a = rufe('anlegen', { schluessel: s, body: { entscheidungen: [{ positionId: '5001', zustand: 'Gut', grund: 'Kratzer an der Seite' }] } });
   rufe('freigabe-entscheiden', { body: Object.assign({}, link(a.mails[0]), { entscheidung: 'freigeben' }) });
   const b = rufe('zw-liste-buchen', { schluessel: s, body: { id: 'Z1', gebucht: true } });
   assert.equal(b.status, 200);
@@ -392,7 +400,7 @@ test('Fehler (Original fehlt in Shopware) landet als Kommentar, Mailfehler setzt
   const s = anmelden('lager1', 'Passwort-Lager1');
   rufe('retoure', { schluessel: s, query: { nr: '241900' } });
   const a = rufe('anlegen', { schluessel: s, body: { entscheidungen: [
-    { positionId: '5101', zustand: 'Gut' }, { positionId: '5102', zustand: 'Gut' },
+    { positionId: '5101', zustand: 'Gut', grund: 'Kratzer an der Seite' }, { positionId: '5102', zustand: 'Gut', grund: 'Kratzer an der Seite' },
   ] } });
   assert.deepEqual(a.daten.ergebnisse.map((e) => e.status), ['fehler', 'wartet']);
   zwMailfehler(k.speicher, '5102', 'SMTP nicht erreichbar', k.jetzt);
@@ -400,7 +408,7 @@ test('Fehler (Original fehlt in Shopware) landet als Kommentar, Mailfehler setzt
   assert.deepEqual(r.positionen.map((p) => p.status), ['fehler', 'fehler', 'offen']);
   assert.match(r.kommentare[0].text, /nicht in Shopware/);
   assert.match(r.kommentare[1].text, /Freigabe-Mail nicht gesendet/);
-  const b = rufe('anlegen', { schluessel: s, body: { entscheidungen: [{ positionId: '5102', zustand: 'Gut' }] } });
+  const b = rufe('anlegen', { schluessel: s, body: { entscheidungen: [{ positionId: '5102', zustand: 'Gut', grund: 'Kratzer an der Seite' }] } });
   assert.equal(b.daten.ergebnisse[0].status, 'wartet');
   assert.equal(b.daten.ergebnisse[0].versuch, 2);
 });
@@ -409,7 +417,7 @@ test('alter Freigabe-Link gilt nach neuem Versuch nicht mehr', () => {
   const { rufe, anmelden, link } = aufbau();
   const s = anmelden('lager1', 'Passwort-Lager1');
   rufe('retoure', { schluessel: s, query: { nr: '241881' } });
-  const a1 = rufe('anlegen', { schluessel: s, body: { entscheidungen: [{ positionId: '5001', zustand: 'Gut' }] } });
+  const a1 = rufe('anlegen', { schluessel: s, body: { entscheidungen: [{ positionId: '5001', zustand: 'Gut', grund: 'Kratzer an der Seite' }] } });
   const q1 = link(a1.mails[0]);
   rufe('freigabe-entscheiden', { body: Object.assign({}, q1, { entscheidung: 'ablehnen' }) });
   rufe('anlegen', { schluessel: s, body: { entscheidungen: [{ positionId: '5001', zustand: 'Neuwertig' }] } });
@@ -440,7 +448,7 @@ test('plenty- und Shopware-Fehler werden klar gemeldet', () => {
   assert.equal(r.status, 502);
   rufe('retoure', { schluessel: s, query: { nr: '241881' } });
   k.daten = { plan: { art: 'vorschau', barcodes: [] }, a: [{ entries: [] }], b: [{}], shopware: { error: { message: 'invalid_grant' } } };
-  r = zwVerarbeiten(Object.assign({}, anfrage, { url: BASIS + '/vorschau', body: { entscheidungen: [{ positionId: '5001', zustand: 'Gut' }] } }), k);
+  r = zwVerarbeiten(Object.assign({}, anfrage, { url: BASIS + '/vorschau', body: { entscheidungen: [{ positionId: '5001', zustand: 'Gut', grund: 'Kratzer an der Seite' }] } }), k);
   assert.match(JSON.parse(r.body).fehler, /Shopware meldet: invalid_grant/);
 });
 
@@ -455,7 +463,7 @@ test('nach dem Mailversand: Fehler landen in Speicher und Antwort', () => {
   rufe('retoure', { schluessel: s, query: { nr: '241881' } });
   rufe('retoure', { schluessel: s, query: { nr: '241900' } });
   const a = rufe('anlegen', { schluessel: s, body: { entscheidungen: [
-    { positionId: '5001', zustand: 'Gut' }, { positionId: '5102', zustand: 'Gut' },
+    { positionId: '5001', zustand: 'Gut', grund: 'Kratzer an der Seite' }, { positionId: '5102', zustand: 'Gut', grund: 'Kratzer an der Seite' },
   ] } });
   const neu = zwNachMailversand(a, [{ accepted: ['x'] }, { error: 'Authentication failed' }], k.speicher, k.jetzt);
   const d = JSON.parse(neu.body);
@@ -482,4 +490,70 @@ test('Zwischenspeicher bleibt begrenzt', () => {
   assert.equal(k.speicher.cache.reihenfolge.length, 300);
   assert.equal(Object.keys(k.speicher.cache.positionen).length, 300);
   assert.ok(!k.speicher.cache.retouren['300000']);
+});
+
+// ---------- Grund, Preis vom Lager, 9.1.3 ----------
+
+test('ohne Grund wird nichts angelegt (Sehr gut, Gut, Nicht verkaufbar)', () => {
+  const { k, rufe, anmelden } = aufbau();
+  const s = anmelden('lager1', 'Passwort-Lager1');
+  rufe('retoure', { schluessel: s, query: { nr: '241900' } });
+  for (const zustand of ['Sehr gut', 'Gut', 'Nicht verkaufbar']) {
+    const r = rufe('anlegen', { schluessel: s, body: { entscheidungen: [
+      { positionId: '5101', zustand: 'Kein ZW' }, { positionId: '5102', zustand, grund: '   ' },
+    ] } });
+    assert.equal(r.status, 400, zustand);
+    assert.match(r.daten.fehler, /Grund/);
+  }
+  assert.deepEqual(k.speicher.positionen, {}, 'auch die gültige Position wurde nicht angelegt');
+  // Neuwertig und Kein ZW brauchen keinen Grund
+  const ok = rufe('anlegen', { schluessel: s, body: { entscheidungen: [{ positionId: '5102', zustand: 'Neuwertig' }, { positionId: '5101', zustand: 'Kein ZW' }] } });
+  assert.deepEqual(ok.daten.ergebnisse.map((e) => e.status), ['wartet', 'kein_zw']);
+});
+
+test('Lager ändert den Preis: Empfehlung bleibt sichtbar, Warnungen neu berechnet', () => {
+  const { rufe, anmelden, link } = aufbau();
+  const s = anmelden('lager1', 'Passwort-Lager1');
+  rufe('retoure', { schluessel: s, query: { nr: '241881' } });
+  const v = rufe('vorschau', { schluessel: s, body: { entscheidungen: [{ positionId: '5001', zustand: 'Gut' }] } }).daten.vorschau[0];
+  assert.equal(v.empfehlung, 777.99);
+  assert.equal(v.einkaufspreis, 644.11);
+  assert.deepEqual(v.nichtUebernehmen, ['Kategorie Summer Sale', 'Tag flash sale', 'Produkt Option I']);
+
+  const a = rufe('anlegen', { schluessel: s, body: { entscheidungen: [{ positionId: '5001', zustand: 'Gut', grund: 'Kratzer', preis: '599,00' }] } });
+  const st = a.daten.ergebnisse[0];
+  assert.equal(st.vorschau.preis, 599);
+  assert.equal(st.vorschau.empfehlung, 777.99);
+  assert.equal(st.vorschau.preisVomLager, true);
+  assert.ok(st.vorschau.warnungen.some((w) => /unter dem Einkaufspreis/.test(w)));
+  assert.match(a.mails[0].html, /vom Lager geändert, Empfehlung 777,99/);
+  assert.match(a.mails[0].html, /Nicht übernehmen.*Summer Sale/);
+  rufe('freigabe-entscheiden', { body: Object.assign({}, link(a.mails[0]), { entscheidung: 'freigeben' }) });
+  const z = rufe('zw-liste', { schluessel: s }).daten.zwListe[0];
+  assert.deepEqual([z.preis, z.empfehlung, z.preisVomLager], [599, 777.99, true]);
+});
+
+test('ungültiger Preis vom Lager wird abgewiesen, gleicher Preis zählt als Empfehlung', () => {
+  const { rufe, anmelden } = aufbau();
+  const s = anmelden('lager1', 'Passwort-Lager1');
+  rufe('retoure', { schluessel: s, query: { nr: '241881' } });
+  for (const preis of ['abc', '0', '-5']) {
+    const r = rufe('anlegen', { schluessel: s, body: { entscheidungen: [{ positionId: '5001', zustand: 'Gut', grund: 'x', preis }] } });
+    assert.equal(r.status, 400, preis);
+  }
+  const ok = rufe('anlegen', { schluessel: s, body: { entscheidungen: [{ positionId: '5001', zustand: 'Gut', grund: 'x', preis: '777,99' }] } });
+  assert.equal(ok.daten.ergebnisse[0].vorschau.preisVomLager, false);
+});
+
+test('ohne bueroAn geht die Info an freigabeAn, Mailfehler bei der Info ändert die Entscheidung nicht', () => {
+  const { k, rufe, anmelden } = aufbau();
+  delete k.einstellungen.bueroAn;
+  const s = anmelden('lager1', 'Passwort-Lager1');
+  rufe('retoure', { schluessel: s, query: { nr: '241881' } });
+  const a = rufe('anlegen', { schluessel: s, body: { entscheidungen: [{ positionId: '5001', zustand: 'Nicht verkaufbar', grund: 'Motor defekt' }] } });
+  assert.equal(a.mails[0].an, 'tobias@example.com');
+  const neu = JSON.parse(zwNachMailversand(a, [{ error: { message: 'SMTP aus' } }], k.speicher, k.jetzt).body);
+  assert.equal(neu.ergebnisse[0].status, 'nicht_verkaufbar');
+  assert.match(neu.ergebnisse[0].hinweis, /Büro nicht gesendet/);
+  assert.equal(k.speicher.retourenFertig['241881'].status, '9.1.3');
 });

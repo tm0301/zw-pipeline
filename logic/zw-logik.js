@@ -19,6 +19,15 @@ const ZW_ZUSTAENDE = {
 // Entscheidungen, die keinen Artikel erzeugen
 const ZW_OHNE_ARTIKEL = ['Nicht verkaufbar', 'Kein ZW'];
 
+// Bei diesen Entscheidungen muss das Lager einen Grund angeben. Er geht ans Büro
+// und später in die Beschreibung des ZW-Artikels.
+const ZW_GRUND_PFLICHT = ['Sehr gut', 'Gut', 'Nicht verkaufbar'];
+const ZW_GRUND_MAX = 500;
+
+function grundPflicht(zustand) {
+  return ZW_GRUND_PFLICHT.includes(zustand);
+}
+
 function istZwZustand(zustand) {
   return Object.prototype.hasOwnProperty.call(ZW_ZUSTAENDE, zustand);
 }
@@ -72,11 +81,33 @@ function berechneZwPreis({ jetzigerPreis, mindestpreis, zustand, einkaufspreis }
   const preis = abrundenAuf99(roh);
   const warnungen = [];
   if (fall === 'b') warnungen.push('Mindestpreis ist leer. Preis wurde vom jetzigen Preis berechnet.');
-  const ek = zahlOderNull(einkaufspreis);
-  if (ek !== null && preis < ek) {
-    warnungen.push('ZW-Preis ' + euro(preis) + ' liegt unter dem Einkaufspreis ' + euro(ek) + '.');
-  }
+  warnungen.push(...zwPreisWarnungen(preis, { einkaufspreis, streichpreis: jetzt }));
   return { preis, streichpreis: jetzt, fall, basis, abschlag, warnungen };
+}
+
+// Warnungen zu einem ZW-Preis. Sie blockieren nicht.
+function zwPreisWarnungen(preis, { einkaufspreis, streichpreis }) {
+  const warnungen = [];
+  const ek = zahlOderNull(einkaufspreis);
+  if (ek !== null && preis < ek) warnungen.push('ZW-Preis ' + euro(preis) + ' liegt unter dem Einkaufspreis ' + euro(ek) + '.');
+  const sp = zahlOderNull(streichpreis);
+  if (sp !== null && preis >= sp) warnungen.push('ZW-Preis ' + euro(preis) + ' ist nicht günstiger als der Streichpreis ' + euro(sp) + '.');
+  return warnungen;
+}
+
+// Preis, den das Lager eingetippt hat („1.234,56“, „1234,56“ oder „1234.56“). Leer = Empfehlung übernehmen.
+function lagerPreisLesen(wert) {
+  if (wert === null || wert === undefined || String(wert).trim() === '') return null;
+  if (typeof wert === 'number') {
+    if (!Number.isFinite(wert)) throw new Error('Preis ist keine Zahl.');
+  }
+  let t = String(wert).trim().replace(/\s|€/g, '');
+  if (/^\d{1,3}(\.\d{3})+(,\d{1,2})?$/.test(t)) t = t.replace(/\./g, '');
+  t = t.replace(',', '.');
+  if (!/^\d+(\.\d{1,2})?$/.test(t)) throw new Error('Preis „' + String(wert).slice(0, 20) + '“ ist keine gültige Zahl.');
+  const preis = Math.round(Number(t) * 100) / 100;
+  if (!(preis >= 1) || preis > 100000) throw new Error('Preis muss zwischen 1 € und 100.000 € liegen.');
+  return preis;
 }
 
 function zwBarcode(ean, zustand) {
@@ -99,10 +130,11 @@ function zwName(name) {
   return mitPraefix('[Zweite Wahl]', name);
 }
 
-function zwKommentar({ zustand, varianteId, plus1 }) {
-  if (zustand === 'Nicht verkaufbar') return 'Nicht verkaufbar, an Büro';
-  if (zustand === 'Kein ZW') return 'Kein ZW';
-  return (plus1 ? 'ZW +1: ' : 'ZW angelegt: ') + varianteId + ' (' + zustand + ')';
+function zwKommentar({ zustand, varianteId, plus1, grund }) {
+  const mitGrund = grund ? '. Grund: ' + grund : '';
+  if (zustand === 'Nicht verkaufbar') return 'Nicht verkaufbar, an Büro' + mitGrund;
+  if (zustand === 'Kein ZW') return 'Kein ZW' + mitGrund;
+  return (plus1 ? 'ZW +1: ' : 'ZW angelegt: ') + varianteId + ' (' + zustand + ')' + mitGrund;
 }
 
 function euro(betrag) {
@@ -111,8 +143,8 @@ function euro(betrag) {
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
-    ZW_STANDARD, ZW_ZUSTAENDE, ZW_OHNE_ARTIKEL,
-    istZwZustand, istGueltigeEntscheidung, abrundenAuf99, berechneZwPreis,
+    ZW_STANDARD, ZW_ZUSTAENDE, ZW_OHNE_ARTIKEL, ZW_GRUND_PFLICHT, ZW_GRUND_MAX,
+    istZwZustand, istGueltigeEntscheidung, grundPflicht, abrundenAuf99, berechneZwPreis, zwPreisWarnungen, lagerPreisLesen,
     zwBarcode, zwVariantennummer, zwName, zwKommentar, euro,
   };
 }

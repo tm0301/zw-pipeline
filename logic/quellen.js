@@ -7,6 +7,25 @@ const LEER_PLENTY = { method: 'GET', endpoint: '/rest/items/variations', query: 
 const LEER_SHOPWARE = { limit: 1, filter: [{ type: 'equals', field: 'productNumber', value: 'ZW-KEINE-ABFRAGE' }], includes: { product: ['id'] } };
 const SHOPWARE_FELDER = ['id', 'productNumber', 'name', 'ean', 'active', 'stock', 'isCloseout', 'price', 'purchasePrices', 'customFields', 'categoryIds', 'tagIds'];
 const POSITION_VERSANDKOSTEN = 6;
+
+// Was der ZW-Artikel in Shopware nicht vom Original übernehmen darf (Tobias, 07.10.2026):
+// keine Sale-Aktionen und keine wählbaren Produktoptionen wie „2 % Rabatt bei Vorkasse per Überweisung“.
+// IDs per API gelesen am 07.10.2026. Neue Sale-Unterkategorien müssen hier ergänzt werden (Phase 6: dynamisch laden).
+const SALE_KATEGORIEN = {
+  '01920f7ac35c752a8113760414000306': 'Sale',
+  '019c753f7c9a7bf8a5920e6c349456ea': 'Flash Sale',
+  '019c8fca63057eacaa2ff83aaeeb3db4': 'Spring Sale',
+  '019f13061667716a9525667c2acb4d56': 'Summer Sale',
+  '019f1355481e7d639cb8f821bd02d6a9': '75 EUR Rabatt',
+  '019f13556493703cb923c03d32ef347c': '250 EUR Rabatt',
+  '01a037ed9aff7e0997523b5585f46a51': 'Autumn Sale',
+};
+const SALE_TAGS = { '019c75c6b03378f4bb6bb46085c38bdc': 'flash sale' };
+const PRODUKTOPTIONEN = {
+  dvsn_product_option_product_option_1: 'Produkt Option I',
+  dvsn_product_option_product_option_2: 'Produkt Option II',
+  dvsn_product_option_product_option_3: 'Produkt Option III',
+};
 const AUFTRAG_EIGENSCHAFT_EXTERNE_NR = 7; // Shop-Auftragsnummer, z. B. MK91001
 
 // Status wie in plenty angezeigt („9.1.1“) in die interne Zahl umrechnen (9.11).
@@ -113,7 +132,17 @@ function shopwareProdukt(p) {
     mindestpreis: zahl(cf.custom_price_minprice),
     einkaufspreis: zahl(ek.gross),
     zustand: cf.custom_secondhand_condition || null,
+    nichtUebernehmen: nichtUebernehmen(p),
   };
+}
+
+// Sale-Kategorien, Sale-Tags und Produktoptionen des Originals, die der ZW-Artikel nicht bekommt.
+function nichtUebernehmen(p) {
+  const cf = p.customFields || {};
+  return []
+    .concat((p.categoryIds || []).filter((id) => SALE_KATEGORIEN[id]).map((id) => 'Kategorie ' + SALE_KATEGORIEN[id]))
+    .concat((p.tagIds || []).filter((id) => SALE_TAGS[id]).map((id) => 'Tag ' + SALE_TAGS[id]))
+    .concat(Object.keys(PRODUKTOPTIONEN).filter((f) => cf[f]).map((f) => PRODUKTOPTIONEN[f]));
 }
 
 function shopwareNachNummer(antwort) {
@@ -128,5 +157,6 @@ if (typeof module !== 'undefined' && module.exports) {
     LEER_PLENTY, LEER_SHOPWARE, plentyStatus, retourenNummer,
     anfrageRetourenListe, anfrageRetoure, anfrageVarianten, anfrageBarcode, shopwareSuche,
     plentyFehler, eintraege, artikelPositionen, shopAuftrag, eanAusVariante, textOhneHtml, shopwareProdukt, shopwareNachNummer,
+    SALE_KATEGORIEN, SALE_TAGS, PRODUKTOPTIONEN, nichtUebernehmen,
   };
 }

@@ -54,6 +54,8 @@ Doppelklick auf **Einstellungen**:
 | `einstellungen.statusOffen` / `statusFertig` | Retouren-Status 9.1.1 (diese Retouren zeigt die Seite) und 9.3 |
 | `einstellungen.anmeldungMinuten` | Wie lange eine Anmeldung gilt (Standard 600 = 10 Stunden) |
 | `einstellungen.seitenAdresse` | leer lassen (nur nötig, falls die Links in den Mails falsch sind) |
+| `einstellungen.bueroAn` | E-Mail-Adresse des Büros für „Nicht verkaufbar“. Leer = geht an `freigabeAn` |
+| `einstellungen.statusNichtVerkaufbar` | Status, wenn eine Position nicht verkaufbar ist: 9.1.3 (Reklamieren) |
 
 Danach **speichern und erneut Publish**, damit die Änderung gilt.
 
@@ -71,7 +73,12 @@ Eine Retoure öffnen und pro Artikel einen Zustand wählen: Die Vorschau rechnet
 - Echte Retouren im Status 9.1.1 aus plenty, mit Shop-Auftragsnummer und den Kommentaren aus plenty. Suche nach Retouren-Nr.
 - Pro Artikel: Neuwertig · Sehr gut · Gut · Nicht verkaufbar · Kein ZW, mit Vorschau (Preis aus Shopware, Streichpreis,
   neu oder +1 auf einen vorhandenen ZW-Artikel in plenty, Warnungen).
+- **Grund** pro Position: Pflicht bei Sehr gut, Gut und Nicht verkaufbar, freiwillig bei Neuwertig und Kein ZW. Er steht in der Mail,
+  im Kommentar und in der ZW-Liste und kommt später in die Beschreibung des ZW-Artikels.
+- **Preis:** Die Seite zeigt eine Empfehlung nach der Preisregel. Das Lager darf den Preis ändern. In der Freigabe-Mail stehen dann beide Preise.
 - Anlegen → eine Freigabe-Mail pro Artikel → Freigeben oder Ablehnen auf einer Bestätigungsseite.
+- **Nicht verkaufbar:** Info-Mail mit Grund ans Büro. Sind alle Positionen entschieden, geht die Retoure auf 9.1.3 (Reklamieren), sonst auf 9.3.
+- Die Vorschau zeigt, was der ZW-Artikel in Shopware nicht vom Original übernimmt: Sale-Kategorien, Tag „flash sale“, Produktoptionen I–III.
 - Nachgestellt: neue Varianten-ID (`SIM-1`, `SIM-2` …), Bestand +1, Kommentar in der Retoure, Status 9.3. In plenty und Shopware ändert sich nichts.
 - Tab **ZW-Liste** (ersetzt die Excel-Liste): alle freigegebenen ZW-Artikel, Knopf **Bestand gebucht**, Suche, Filter, CSV-Export. Darunter das Protokoll.
 - Fehler (z. B. Original fehlt in Shopware, Artikel ohne EAN, Mail nicht gesendet) als Kommentar. Die Position kann neu angelegt werden.

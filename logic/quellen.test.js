@@ -50,7 +50,7 @@ test('Shopware-Produkt auslesen', () => {
   }] });
   assert.deepEqual(k['772160'], {
     id: 'x', produktnummer: '772160', name: 'Backofen', ean: '4002516769965', preis: 1149, streichpreisAktuell: 1299,
-    mindestpreis: 865, einkaufspreis: 644.11, zustand: null,
+    mindestpreis: 865, einkaufspreis: 644.11, zustand: null, nichtUebernehmen: [],
   });
   assert.deepEqual(q.shopwareNachNummer({ error: 'x' }), {});
 });

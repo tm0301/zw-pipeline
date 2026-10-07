@@ -93,3 +93,15 @@ test('gültige Entscheidungen', () => {
   for (const z of ['Neuwertig', 'Sehr gut', 'Gut', 'Nicht verkaufbar', 'Kein ZW']) assert.ok(L.istGueltigeEntscheidung(z));
   assert.ok(!L.istGueltigeEntscheidung('Wie neu'));
 });
+
+test('Grund-Pflicht, Lager-Preis und Preis-Warnungen', () => {
+  const z = require('./zw-logik.js');
+  assert.deepEqual(['Neuwertig', 'Sehr gut', 'Gut', 'Nicht verkaufbar', 'Kein ZW'].map(z.grundPflicht), [false, true, true, true, false]);
+  assert.equal(z.lagerPreisLesen('2.237,99'), 2237.99);
+  assert.equal(z.lagerPreisLesen('2237.99'), 2237.99);
+  assert.equal(z.lagerPreisLesen(''), null);
+  assert.throws(() => z.lagerPreisLesen('1,999'));
+  assert.throws(() => z.lagerPreisLesen('0'));
+  assert.deepEqual(z.zwPreisWarnungen(500, { einkaufspreis: 600, streichpreis: 499 }).length, 2);
+  assert.match(z.zwKommentar({ zustand: 'Gut', varianteId: '1', grund: 'Kratzer' }), /Grund: Kratzer$/);
+});
