@@ -57,6 +57,8 @@ function nurNoetig(einstieg) {
   return alleTeile.filter((x) => noetig.has(x.name)).map((x) => x.text).join('\n\n') + '\n';
 }
 const seite = lies('frontend/zw-station.html');
+// Die Seite steht als String.raw`…` im Code-Baustein. Dafür darf sie keine Backticks und kein ${ enthalten.
+if (/`|\$\{/.test(seite)) throw new Error('frontend/zw-station.html darf keine Backticks und kein ${ enthalten');
 const version = createHash('sha256').update(logik + seite).digest('hex').slice(0, 10);
 
 const KOPF = '// ZW-Pipeline · erzeugt von n8n/bauen.mjs · Version ' + version + '\n' +
@@ -83,8 +85,8 @@ const codeRundeB = KOPF + nurNoetig(['zwRundeB']) + '\n' +
   'return [{ json: { plenty: zwRundeB(plan, $input.all().map((i) => i.json)) } }];\n';
 
 const codeLogik = KOPF +
-  '// Die Seite der ZW-Station, Zeile für Zeile (Quelle: frontend/zw-station.html)\n' +
-  'const SEITE_HTML = [\n' + seite.replace(/\n$/, '').split('\n').map((z) => '  ' + JSON.stringify(z) + ',').join('\n') + '\n].join(\'\\n\') + \'\\n\';\n\n' +
+  '// Die Seite der ZW-Station als Rohtext (Quelle: frontend/zw-station.html)\n' +
+  'const SEITE_HTML = String.raw`' + seite + '`;\n\n' +
   logik + '\n' +
   '// ---------- Aufruf durch n8n ----------\n' +
   '// Die Daten aus plenty und Shopware gibt es nur, wenn „Daten nötig?“ den oberen Weg genommen hat.\n' +
