@@ -343,7 +343,7 @@ test('kompletter Durchlauf: anlegen, Mail, freigeben, +1, ablehnen, fertig', () 
     'Alle Positionen entschieden, Status 9.1.3 (Reklamieren, weil nicht verkaufbar) (Probelauf: nicht gesetzt)',
   ]);
   const liste = rufe('retouren', { schluessel: s }).daten.retouren;
-  assert.deepEqual(liste.map((x) => [x.id, x.probelaufStatus, x.erledigt]), [['241900', '9.1.3', 3], ['241881', null, 0]]);
+  assert.deepEqual(liste.map((x) => [x.id, x.probelaufStatus, x.erledigt]), [['241881', null, 0]]);
 
   // Retoure 241881: Sehr gut gibt es echt (788902) → +1, Ablehnen lässt die Position offen
   rufe('retoure', { schluessel: s, query: { nr: '241881' } });
@@ -621,4 +621,33 @@ test('ungültige Bilder werden abgewiesen, ohne etwas anzulegen', () => {
     assert.match(r.daten.fehler, /Bild/);
   }
   assert.deepEqual(k.speicher.positionen, {});
+});
+
+test('Fertige Retouren: raus aus der Liste, in den Ordner „Fertig“, nach 7 Tagen aufgeräumt', () => {
+  const { k, rufe, anmelden } = aufbau();
+  const s = anmelden('lager1', 'Passwort-Lager1');
+  rufe('retoure', { schluessel: s, query: { nr: '241881' } });
+  rufe('anlegen', { schluessel: s, body: { entscheidungen: [{ positionId: '5001', zustand: 'Nicht verkaufbar', grund: 'Glas kaputt' }] } });
+  let d = rufe('retouren', { schluessel: s }).daten;
+  assert.deepEqual(d.retouren.map((r) => r.id), ['241900']);
+  assert.deepEqual(d.fertig, [{ id: '241881', status: '9.1.3', fertigAm: '2026-10-07T10:00:00.000Z', datum: '2026-10-01', shopAuftrag: 'MK91001', anzahl: 1 }]);
+  // Geöffnet werden kann sie weiterhin
+  assert.equal(rufe('retoure', { schluessel: s, query: { nr: '241881' } }).daten.retoure.positionen[0].status, 'nicht_verkaufbar');
+
+  k.jetzt += 6 * 86400000;
+  assert.equal(rufe('retouren', { schluessel: anmelden('lager1', 'Passwort-Lager1') }).daten.fertig.length, 1);
+  k.jetzt += 2 * 86400000;
+  const s2 = anmelden('lager1', 'Passwort-Lager1');
+  d = rufe('retouren', { schluessel: s2 }).daten;
+  assert.deepEqual(d.fertig, []);
+  assert.deepEqual(d.retouren.map((r) => r.id), ['241900'], 'taucht im Probelauf nicht wieder als offen auf');
+  assert.equal(k.speicher.kommentare['241881'], undefined);
+});
+
+test('alte Einträge im Ordner „Fertig“ ohne gültige Zeit werden entfernt', () => {
+  const { k, rufe, anmelden } = aufbau();
+  const s = anmelden('lager1', 'Passwort-Lager1');
+  k.speicher.retourenFertig = { 50101: true, 241881: '2026-10-06T08:00:00.000Z' };
+  const d = rufe('retouren', { schluessel: s }).daten;
+  assert.deepEqual(d.fertig.map((f) => [f.id, f.fertigAm]), [['241881', '2026-10-06T08:00:00.000Z']]);
 });

@@ -8,9 +8,10 @@
 <style>
 :root {
   --bg: #f3f6f4; --surface: #ffffff; --surface-2: #f7faf8; --fg: #1c2a23; --muted: #66766e; --line: #e0e7e2;
-  --accent: #16a15b; --accent-dark: #11834a; --accent-ink: #ffffff; --accent-soft: #e7f6ee;
+  /* Grün aus dem mykitchens-Logo */
+  --accent: #3b864b; --accent-dark: #2f6d3c; --accent-ink: #ffffff; --accent-soft: #eaf3ec;
   --ok: #15803d; --ok-bg: #e5f5ea; --warn: #9a5b06; --warn-bg: #fff3dc;
-  --err: #c0362c; --err-bg: #fdeceb; --info-bg: #eef6f1;
+  --err: #c0362c; --err-bg: #fdeceb; --info-bg: #eff6f1;
   --font-ui: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --font-code: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --schatten: 0 1px 2px rgba(20, 50, 35, .06), 0 2px 8px rgba(20, 50, 35, .05);
@@ -28,8 +29,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 
 /* Logo */
 .logo { display: flex; align-items: center; gap: 10px; }
-.logo-wort { font-weight: 800; font-size: 1.25rem; letter-spacing: -.02em; color: var(--accent); }
-.logo-app { font-weight: 700; font-size: 1.05rem; color: var(--fg); }
+.logo-bild { display: inline-block; width: 140px; height: 25px; flex: none; background: url(data:image/png;base64,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) no-repeat left center / contain; }
+.logo-app { font-weight: 700; font-size: 1rem; color: var(--fg); padding-top: 3px; }
 
 /* Knöpfe und Felder */
 .btn { font-size: 1rem; font-weight: 600; padding: 12px 20px; border-radius: 10px; border: 1px solid var(--accent); background: var(--accent); color: var(--accent-ink); min-height: 48px; }
@@ -69,6 +70,12 @@ textarea { font: .85rem var(--font-code); width: 100%; min-height: 90px; }
 .side-item .nr { font: 600 1rem var(--font-code); }
 .side-item .klein { grid-column: 1 / -1; color: var(--muted); font-size: .8rem; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 .side-item .anzahl { color: var(--muted); font-weight: 600; font-size: .9rem; }
+.ordner { width: 100%; display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-top: 8px; padding: 12px 18px; border: 0; border-top: 1px solid var(--line); background: transparent; color: var(--fg); font-weight: 600; font-size: .95rem; text-align: left; }
+.ordner:hover { background: var(--surface-2); }
+.ordner .pfeil { display: inline-block; color: var(--muted); transition: transform .15s; margin-right: 6px; }
+.ordner[aria-expanded="true"] .pfeil { transform: rotate(90deg); }
+.ordner-hinweis { padding: 0 18px 6px; font-size: .78rem; }
+.side-item.erledigt .nr { color: var(--muted); }
 .side-item.filter { display: flex; justify-content: space-between; padding: 12px 18px; }
 .side-item.filter .anzahl { color: var(--fg); }
 .side-info { padding: 12px 18px; }
@@ -171,7 +178,7 @@ details.panel > summary { cursor: pointer; padding: 12px 0; font-weight: 600; }
 <!-- Anmeldung -->
 <div class="mitte" id="s-login" hidden>
   <section class="karte">
-    <div class="logo"><span class="logo-wort">mykitchens</span><span class="logo-app">ZW-Station</span></div>
+    <div class="logo"><span class="logo-bild" role="img" aria-label="mykitchens"></span><span class="logo-app">ZW-Station</span></div>
     <h2>Anmelden</h2>
     <form id="login-form" class="liste" autocomplete="on">
       <div class="field"><label for="l-user">Benutzername</label><input id="l-user" name="username" autocomplete="username" required autocapitalize="none"></div>
@@ -186,7 +193,7 @@ details.panel > summary { cursor: pointer; padding: 12px 0; font-weight: 600; }
 <!-- Zugang einrichten: läuft nur im Browser, nichts wird gesendet -->
 <div class="mitte" id="s-setup" hidden>
   <section class="karte breit">
-    <div class="logo"><span class="logo-wort">mykitchens</span><span class="logo-app">ZW-Station</span></div>
+    <div class="logo"><span class="logo-bild" role="img" aria-label="mykitchens"></span><span class="logo-app">ZW-Station</span></div>
     <h2>Zugang einrichten</h2>
     <p class="hint">Erzeugt den Eintrag für eine Person. Das Passwort verlässt diesen Browser nicht. Den Eintrag in n8n im Baustein „Einstellungen“ unter <b>einstellungen.benutzer</b> in die Liste einfügen.</p>
     <form id="setup-form" class="setup">
@@ -205,7 +212,7 @@ details.panel > summary { cursor: pointer; padding: 12px 0; font-weight: 600; }
 <div class="app" id="s-app" hidden>
   <aside class="side">
     <div class="side-kopf">
-      <div class="logo"><span class="logo-wort">mykitchens</span><span class="logo-app">ZW-Station</span></div>
+      <div class="logo"><span class="logo-bild" role="img" aria-label="mykitchens"></span><span class="logo-app">ZW-Station</span></div>
       <div class="seg" role="tablist">
         <button type="button" role="tab" id="tab-ret" aria-selected="true">Retouren<span class="zahl" id="n-ret"></span></button>
         <button type="button" role="tab" id="tab-zw" aria-selected="false">ZW-Artikel<span class="zahl" id="n-zw"></span></button>
@@ -436,6 +443,7 @@ details.panel > summary { cursor: pointer; padding: 12px 0; font-weight: 600; }
       $('banner').hidden = String(d.modus || '').indexOf('probelauf') !== 0;
       $('list-loading').hidden = true;
       zustand.retouren = d.retouren;
+      zustand.fertig = d.fertig || [];
       zeigeRetourenListe();
       if (!zustand.retoure && window.matchMedia('(min-width: 901px)').matches) setTimeout(function () { $('search-input').focus(); }, 0);
     }).catch(function (err) { $('list-loading').hidden = true; fehler('list-error', err.message); });
@@ -450,7 +458,19 @@ details.panel > summary { cursor: pointer; padding: 12px 0; font-weight: 600; }
     $('list-empty').hidden = liste.length > 0 || !zustand.retouren;
     $('list-empty').textContent = such ? 'Nicht in der Liste. Mit „Öffnen“ trotzdem suchen.' : 'Keine offenen Retouren.';
     var aktiv = zustand.retoure ? String(zustand.retoure.id) : null;
-    $('ret-list').innerHTML = liste.map(function (r) {
+    var fertig = (zustand.fertig || []).filter(function (r) { return !such || String(r.id).indexOf(such) >= 0 || String(r.shopAuftrag || '').toLowerCase().indexOf(such.toLowerCase()) >= 0; });
+    // Ordner „Fertig“: alle Positionen entschieden, wird nach 7 Tagen automatisch geleert
+    var ordner = '<button type="button" class="ordner" id="ordner-fertig" aria-expanded="' + !!zustand.fertigOffen + '"><span><span class="pfeil" aria-hidden="true">▸</span>Fertig</span><span class="anzahl">' + fertig.length + '</span></button>' +
+      (zustand.fertigOffen ? '<p class="hint ordner-hinweis">Wird nach 7 Tagen automatisch geleert.</p>' + fertig.map(function (r) {
+        return '<button type="button" class="side-item erledigt" data-nr="' + esc(r.id) + '" aria-current="' + (String(r.id) === aktiv) + '">' +
+          '<span class="nr">' + esc(r.id) + '</span><span class="punkt ' + (r.status === '9.3' ? 'ok' : 'warn') + '">' + esc(r.status || 'fertig') + '</span>' +
+          '<span class="klein">fertig am ' + esc(datum(r.fertigAm)) + (r.shopAuftrag ? ' · ' + esc(r.shopAuftrag) : '') + '</span></button>';
+      }).join('') : '');
+    $('ret-list').innerHTML = ordnerUndListe(liste, aktiv) + ordner;
+  }
+
+  function ordnerUndListe(liste, aktiv) {
+    return liste.map(function (r) {
       var b = [];
       if (r.probelaufFertig) b.push('<span class="punkt ok">fertig' + (r.probelaufStatus ? ' ' + esc(r.probelaufStatus) : '') + '</span>');
       else if (r.erledigt) b.push('<span class="punkt ok">' + r.erledigt + ' erledigt</span>');
@@ -466,6 +486,12 @@ details.panel > summary { cursor: pointer; padding: 12px 0; font-weight: 600; }
   function listenEintragAktualisieren() {
     var r = zustand.retoure; if (!r || !zustand.retouren) return;
     var e = zustand.retouren.filter(function (x) { return String(x.id) === String(r.id); })[0]; if (!e) return;
+    if (r.probelaufFertig) {
+      zustand.retouren = zustand.retouren.filter(function (x) { return x !== e; });
+      zustand.fertig = [{ id: e.id, status: r.probelaufStatus, fertigAm: new Date().toISOString(), datum: e.datum, shopAuftrag: e.shopAuftrag, anzahl: e.anzahl }].concat(zustand.fertig || []);
+      zeigeRetourenListe();
+      return;
+    }
     var st = r.positionen.map(function (p) { return p.status; });
     e.erledigt = st.filter(function (s) { return ['angelegt', 'plus1', 'nicht_verkaufbar', 'kein_zw'].indexOf(s) >= 0; }).length;
     e.wartet = st.filter(function (s) { return s === 'wartet'; }).length;
@@ -475,6 +501,7 @@ details.panel > summary { cursor: pointer; padding: 12px 0; font-weight: 600; }
   }
 
   $('ret-list').addEventListener('click', function (e) {
+    if (e.target.closest('#ordner-fertig')) { zustand.fertigOffen = !zustand.fertigOffen; zeigeRetourenListe(); return; }
     var b = e.target.closest('.side-item'); if (b) oeffneRetoure(b.dataset.nr);
   });
   $('search-input').addEventListener('input', zeigeRetourenListe);

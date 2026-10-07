@@ -25,6 +25,8 @@ const ERLEDIGT = ['angelegt', 'plus1', 'nicht_verkaufbar', 'kein_zw'];
 const MAX_FEHLVERSUCHE = 5;
 const SPERRE_MINUTEN = 15;
 const MAX_ZWISCHENSPEICHER_RETOUREN = 300;
+// Fertige Retouren stehen so lange im Ordner „Fertig“, danach räumt die Station sie weg.
+const FERTIG_TAGE = 7;
 const DATEN_AKTIONEN = ['retouren', 'retoure', 'vorschau', 'anlegen'];
 // Bilder zum Grund: höchstens 3 pro Position. Die Seite verkleinert sie vorher (JPEG, etwa 300 KB).
 const BILDER_MAX = 3;
@@ -138,7 +140,8 @@ function zwAktion(anfrage, k) {
     : angemeldetePerson(anfrage.headers || {}, e, k.jetzt);
   switch (aktion) {
     case 'retouren':
-      return json(200, { ok: true, person, modus: 'probelauf-echtdaten', retouren: retourenListe(speicher, daten(k, 'retouren')) });
+      fertigAufraeumen(speicher, k.jetzt);
+      return json(200, { ok: true, person, modus: 'probelauf-echtdaten', retouren: retourenListe(speicher, daten(k, 'retouren')), fertig: fertigListe(speicher) });
     case 'retoure':
       if (!retourenNummer(q.nr)) return json(404, { ok: false, fehler: 'Retoure „' + String(q.nr || '').slice(0, 40) + '“ nicht gefunden.' });
       return json(200, { ok: true, retoure: retoureDetail(speicher, q.nr, daten(k, 'retoure'), k.jetzt) });
@@ -336,6 +339,8 @@ function zaehlen(speicher, positionIds) {
   };
 }
 
+// Offene Retouren. Fertige (alle Positionen entschieden) stehen im Ordner „Fertig“, nicht hier.
+// Im Echtbetrieb verlassen sie 9.1.1 ohnehin, im Probelauf bleiben sie in plenty auf 9.1.1.
 function retourenListe(speicher, d) {
   return eintraege(d.a[0]).map((auftrag) => {
     const positionen = artikelPositionen(auftrag);
@@ -344,7 +349,35 @@ function retourenListe(speicher, d) {
       id, datum: String(auftrag.createdAt || '').slice(0, 10), shopAuftrag: shopAuftrag(auftrag), anzahl: positionen.length,
       probelaufFertig: !!speicher.retourenFertig[id], probelaufStatus: fertigStatus(speicher, id),
     }, zaehlen(speicher, positionen.map((p) => p.positionId)));
-  });
+  }).filter((r) => !r.probelaufFertig && !(r.anzahl > 0 && r.erledigt === r.anzahl));
+}
+
+function fertigZeit(f) {
+  return Date.parse(f && typeof f === 'object' ? f.zeit : f);
+}
+
+// Ordner „Fertig“: zuletzt abgeschlossene Retouren zuerst
+function fertigListe(speicher) {
+  return Object.keys(speicher.retourenFertig).map((id) => {
+    const t = fertigZeit(speicher.retourenFertig[id]);
+    const r = speicher.cache.retouren[id] || {};
+    return {
+      id, status: fertigStatus(speicher, id), fertigAm: Number.isFinite(t) ? new Date(t).toISOString() : '',
+      datum: r.datum || '', shopAuftrag: r.shopAuftrag || '', anzahl: (r.positionIds || []).length,
+    };
+  }).sort((a, b) => (a.fertigAm < b.fertigAm ? 1 : -1));
+}
+
+// Nach FERTIG_TAGE Tagen aus dem Ordner entfernen. Die Entscheidungen der Positionen bleiben gespeichert,
+// damit eine Retoure, die im Probelauf noch auf 9.1.1 steht, nicht wieder als offen erscheint.
+function fertigAufraeumen(speicher, jetzt) {
+  const grenze = jetzt - FERTIG_TAGE * 86400000;
+  for (const id of Object.keys(speicher.retourenFertig)) {
+    if (!(fertigZeit(speicher.retourenFertig[id]) >= grenze)) {
+      delete speicher.retourenFertig[id];
+      delete speicher.kommentare[id];
+    }
+  }
 }
 
 // Status, auf den die Retoure im Echtbetrieb gesetzt würde (im Probelauf nur vermerkt).
