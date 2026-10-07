@@ -5,7 +5,9 @@
 // Platzhalter, wenn in einer Runde nichts zu holen ist. Liefert leere Ergebnisse.
 const LEER_PLENTY = { method: 'GET', endpoint: '/rest/items/variations', query: { barcode: 'ZW-KEINE-ABFRAGE', itemsPerPage: 1 } };
 const LEER_SHOPWARE = { limit: 1, filter: [{ type: 'equals', field: 'productNumber', value: 'ZW-KEINE-ABFRAGE' }], includes: { product: ['id'] } };
-const SHOPWARE_FELDER = ['id', 'productNumber', 'name', 'ean', 'active', 'stock', 'isCloseout', 'price', 'purchasePrices', 'customFields', 'categoryIds', 'tagIds'];
+const SHOPWARE_FELDER = ['id', 'productNumber', 'name', 'ean', 'active', 'stock', 'isCloseout', 'price', 'purchasePrices', 'customFields', 'categoryIds', 'tagIds', 'description'];
+// Was der Trockenlauf (6.0) vom plenty-Original braucht, um die Kopie nachzubauen
+const PLENTY_ORIGINAL_MIT = 'variationSalesPrices,variationCategories,variationDefaultCategory,variationSuppliers,variationWarehouses,variationBarcodes,properties,tags,unit';
 const POSITION_VERSANDKOSTEN = 6;
 
 // Sale-Kategorien und -Tags des Originals bekommt der ZW-Artikel in Shopware nicht (von Tobias bestätigt am 07.10.2026).
@@ -59,10 +61,32 @@ function anfrageBarcode(code) {
   return { method: 'GET', endpoint: '/rest/items/variations', query: { barcode: code, itemsPerPage: 5 } };
 }
 
-function shopwareSuche(varianteIds) {
+// Originale über die Produktnummer (= plenty-Varianten-ID). Mit EANs zusätzlich alle Artikel mit derselben EAN,
+// darunter die vorhandenen ZW-Artikel (für Bestand +1 im Trockenlauf).
+function shopwareSuche(varianteIds, eans) {
   const ids = [...new Set(varianteIds.map(String))];
   if (!ids.length) return LEER_SHOPWARE;
-  return { limit: ids.length, filter: [{ type: 'equalsAny', field: 'productNumber', value: ids }], includes: { product: SHOPWARE_FELDER } };
+  const mitEan = [...new Set((eans || []).map(String))];
+  const filter = mitEan.length
+    ? [{ type: 'multi', operator: 'or', queries: [{ type: 'equalsAny', field: 'productNumber', value: ids }, { type: 'equalsAny', field: 'ean', value: mitEan }] }]
+    : [{ type: 'equalsAny', field: 'productNumber', value: ids }];
+  return { limit: mitEan.length ? 100 : ids.length, filter, includes: { product: SHOPWARE_FELDER } };
+}
+
+function anfrageOriginale(ids) {
+  return { method: 'GET', endpoint: '/rest/items/variations', query: { id: ids.join(','), with: PLENTY_ORIGINAL_MIT, itemsPerPage: 100 } };
+}
+
+function anfrageArtikel(itemId) {
+  return [
+    { method: 'GET', endpoint: '/rest/items/' + itemId },
+    { method: 'GET', endpoint: '/rest/items/' + itemId + '/item_shipping_profiles' },
+  ];
+}
+
+// Artikel-IDs der Originale, in fester Reihenfolge (Runde B fragt sie in dieser Reihenfolge ab)
+function artikelIdsAus(variantenAntwort) {
+  return [...new Set(eintraege(variantenAntwort).map((v) => String(v.itemId)).filter((id) => /^\d+$/.test(id)))];
 }
 
 // ---------- Antworten auslesen ----------
@@ -129,6 +153,8 @@ function shopwareProdukt(p) {
   const preis = (p.price || [])[0] || {};
   const ek = (p.purchasePrices || [])[0] || {};
   const cf = p.customFields || {};
+  const brutto = zahl(preis.gross);
+  const netto = zahl(preis.net);
   return {
     id: p.id,
     produktnummer: String(p.productNumber),
@@ -140,6 +166,14 @@ function shopwareProdukt(p) {
     einkaufspreis: zahl(ek.gross),
     zustand: cf.custom_secondhand_condition || null,
     nichtUebernehmen: nichtUebernehmen(p),
+    // Für den Trockenlauf (Schreibbefehle)
+    beschreibung: p.description || null,
+    bestand: zahl(p.stock),
+    abverkauf: !!p.isCloseout,
+    waehrungId: preis.currencyId || null,
+    nettoFaktor: brutto && netto ? netto / brutto : null,
+    saleKategorieIds: (p.categoryIds || []).filter((id) => SALE_KATEGORIEN[id]),
+    saleTagIds: (p.tagIds || []).filter((id) => SALE_TAGS[id]),
   };
 }
 
@@ -160,7 +194,7 @@ function shopwareNachNummer(antwort) {
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     LEER_PLENTY, LEER_SHOPWARE, plentyStatus, retourenNummer,
-    anfrageRetourenListe, anfrageRetoure, anfrageVarianten, anfrageBarcode, shopwareSuche,
+    anfrageRetourenListe, anfrageRetoure, anfrageVarianten, anfrageBarcode, shopwareSuche, anfrageOriginale, anfrageArtikel, artikelIdsAus,
     plentyFehler, eintraege, artikelPositionen, rabattPositionen, istRabatt, shopAuftrag, eanAusVariante, textOhneHtml, shopwareProdukt, shopwareNachNummer,
     SALE_KATEGORIEN, SALE_TAGS, nichtUebernehmen,
   };

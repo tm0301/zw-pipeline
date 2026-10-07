@@ -43,13 +43,39 @@ const BARCODES = {
   '4002516769965ZW2': [{ id: 788902 }], // „Sehr gut“ gibt es schon
 };
 
+// Trockenlauf: plenty-Originale mit allen Feldern (Form wie am 07.10.2026 per API gelesen)
+const ORIGINALE = {
+  772160: {
+    id: 772160, itemId: 9724284, number: 'NEW-710385', model: 'H 2861-1 B 125 Edition', externalId: '4002516769965', isActive: false,
+    availability: 3, mainWarehouseId: 110, purchasePrice: 644.11, vatId: 0, weightG: 45000, weightNetG: 0, widthMM: 595, lengthMM: 569, heightMM: 596,
+    unit: { id: 1, unitId: 1, content: 1 },
+    variationSalesPrices: [{ salesPriceId: 1, price: 1099 }, { salesPriceId: 4, price: 0 }],
+    variationCategories: [{ categoryId: 1499, position: 0 }],
+    variationDefaultCategory: [{ branchId: 1499, plentyId: 21456, manually: 'Y' }],
+    variationSuppliers: [{ supplierId: 124, purchasePrice: 579.5, minimumPurchase: 0, itemNumber: '', deliveryTimeInDays: 3, packagingUnit: 1, discount: 0, isDiscountable: false }],
+    variationWarehouses: [{ warehouseId: 110 }],
+    variationBarcodes: [{ barcodeId: 1, code: '4002516769965' }],
+    properties: [{ propertyId: 11, relationTypeIdentifier: 'item', relationValues: [{ lang: '0', value: '13', description: null }] }],
+    tags: [{ tagId: 97, tagType: 'variation' }],
+  },
+  772162: { id: 772162, itemId: 9724300, model: '', availability: 3, purchasePrice: 900, variationCategories: [{ categoryId: 1500 }], tags: [] },
+};
+const ARTIKEL = {
+  9724284: { id: 9724284, manufacturerId: 11, producingCountryId: 1, stockType: 3, condition: 0, texts: [{ lang: 'de', name1: 'Miele H 2861-1 B 125 Edition Einbau-Backofen Edelstahl/CleanSteel inkl. 5 Jahre Garantie', name2: '', description: '' }] },
+  9724300: { id: 9724300, manufacturerId: 12, texts: [] },
+};
+const VERSANDPROFILE = { 9724284: [{ itemId: 9724284, profileId: 9 }, { itemId: 9724284, profileId: 26 }] };
+
 const SHOPWARE = [
   {
     id: 'a1', productNumber: '772160', name: 'Miele H 2861-1 B 125 Edition Einbau-Backofen Edelstahl/CleanSteel', ean: '4002516769965',
     price: [{ currencyId: 'x', gross: 1149, net: 965.55, listPrice: { gross: 1299 } }], purchasePrices: [{ gross: 644.11 }],
     customFields: { custom_price_minprice: 865 },
     categoryIds: ['kat-backofen', '019f13061667716a9525667c2acb4d56'], tagIds: ['019c75c6b03378f4bb6bb46085c38bdc'],
+    description: '<p>Original-Text</p>', stock: 0, isCloseout: false,
   },
+  // vorhandener ZW-Artikel „Sehr gut“ (gleiche EAN wie das Original)
+  { id: 'zw2', productNumber: '788902', name: '[Zweite Wahl] Miele …', ean: '4002516769965', stock: 2, isCloseout: true, price: [{ gross: 820.99 }] },
   {
     id: 'a2', productNumber: '772162', name: 'Siemens iQ500 Geschirrspüler', ean: '4242003000002',
     price: [{ gross: 1099, listPrice: null }], purchasePrices: [{ gross: 1000 }], customFields: {},
@@ -69,9 +95,14 @@ function plentyAnfrage(r) {
   if (m) return m[1] === '241881' ? [{ id: 1, text: '<p>Kratzer&nbsp;an der <b>Tür</b></p>', createdAt: '2026-10-02T08:00:00+02:00' }] : [];
   if (r.endpoint === '/rest/items/variations') {
     if (q.barcode) return { entries: BARCODES[q.barcode] || [] };
-    assert.equal(q.with, 'variationBarcodes');
-    return { entries: String(q.id).split(',').map((id) => VARIANTEN[id]).filter(Boolean) };
+    if (q.with === 'variationBarcodes') return { entries: String(q.id).split(',').map((id) => VARIANTEN[id]).filter(Boolean) };
+    assert.match(q.with, /variationSuppliers/);
+    return { entries: String(q.id).split(',').map((id) => ORIGINALE[id]).filter(Boolean) };
   }
+  m = r.endpoint.match(/^\/rest\/items\/(\d+)$/);
+  if (m) return ARTIKEL[m[1]] || { error: '404 - Item not found' };
+  m = r.endpoint.match(/^\/rest\/items\/(\d+)\/item_shipping_profiles$/);
+  if (m) return VERSANDPROFILE[m[1]] || [];
   throw new Error('unerwartet: ' + r.endpoint);
 }
 
@@ -85,8 +116,9 @@ function plentyStapel(anfragen, protokoll) {
 
 function shopwareSuchen(suche) {
   const f = suche.filter[0];
-  const nummern = f.type === 'equalsAny' ? f.value : [f.value];
-  return { total: 0, data: SHOPWARE.filter((p) => nummern.includes(p.productNumber)) };
+  const teile = f.type === 'multi' ? f.queries : [f];
+  const passt = (p, t) => (t.type === 'equalsAny' ? t.value : [t.value]).includes(String(p[t.field]));
+  return { total: 0, data: SHOPWARE.filter((p) => teile.some((t) => passt(p, t))) };
 }
 
 // ---------- Ein Aufruf wie in n8n: Vorbereiten → plenty A → Runde B → plenty B → Shopware → ZW-Logik ----------
@@ -650,4 +682,93 @@ test('alte Einträge im Ordner „Fertig“ ohne gültige Zeit werden entfernt',
   k.speicher.retourenFertig = { 50101: true, 241881: '2026-10-06T08:00:00.000Z' };
   const d = rufe('retouren', { schluessel: s }).daten;
   assert.deepEqual(d.fertig.map((f) => [f.id, f.fertigAm]), [['241881', '2026-10-06T08:00:00.000Z']]);
+});
+
+// ---------- Trockenlauf (6.0): Schreibbefehle bauen, nicht senden ----------
+
+test('Trockenlauf: neuer ZW-Artikel – Schreibbefehle für plenty und Shopware auf der Freigabe-Seite', () => {
+  const { k, rufe, anmelden, link, abfragen } = aufbau();
+  const s = anmelden('lager1', 'Passwort-Lager1');
+  rufe('retoure', { schluessel: s, query: { nr: '241881' } });
+  abfragen.length = 0;
+  const a = rufe('anlegen', { schluessel: s, body: { entscheidungen: [
+    { positionId: '5001', zustand: 'Neuwertig', grund: 'Nur Karton beschädigt', bilder: [{ name: 'karton.jpg', daten: 'data:image/jpeg;base64,AAAA' }] },
+  ] } });
+  assert.equal(a.daten.ergebnisse[0].status, 'wartet');
+  assert.equal(a.daten.ergebnisse[0].schreibplan, undefined, 'Plan nicht in der Antwort an die Lager-Seite');
+  assert.match(a.mails[0].html, /Trockenlauf/);
+  // Nur lesende Abfragen, inklusive Original, Artikel und Versandprofile
+  assert.ok(abfragen.every((x) => x.method === 'GET'));
+  assert.ok(abfragen.some((x) => x.endpoint === '/rest/items/9724284'));
+  assert.ok(abfragen.some((x) => x.endpoint === '/rest/items/9724284/item_shipping_profiles'));
+
+  const plan = k.speicher.schreibplaene['5001'];
+  assert.deepEqual(plan.fehlt, []);
+  const nach = (titel) => plan.schritte.find((x) => x.titel.startsWith(titel));
+  const item = nach('Artikel mit Hauptvariante').body;
+  assert.equal(item.condition, 4); assert.equal(item.conditionApi, 5); assert.equal(item.stockType, 0); assert.equal(item.manufacturerId, 11);
+  const va = item.variations[0];
+  assert.equal(va.number, '[ZW] H 2861-1 B 125 Edition'); assert.equal(va.externalId, '4002516769965'); assert.equal(va.isActive, false);
+  assert.equal(va.purchasePrice, 644.11); assert.deepEqual(va.variationCategories, [{ categoryId: 1499 }]);
+  assert.equal(nach('Texte').body.name, '[Zweite Wahl] Miele H 2861-1 B 125 Edition Einbau-Backofen Edelstahl/CleanSteel inkl. 5 Jahre Garantie');
+  assert.deepEqual(nach('Barcode').body, { barcodeId: 1, code: '4002516769965ZW1' });
+  assert.deepEqual(plan.schritte.filter((x) => x.titel.startsWith('Verkaufspreis')).map((x) => x.body), [{ salesPriceId: 1, price: 1099 }], 'Preise mit 0 weglassen');
+  assert.equal(nach('Lieferant').body.purchasePrice, 579.5);
+  assert.deepEqual(nach('Tags').body.map((x) => x.tagId), [97, 32]);
+  assert.deepEqual(plan.schritte.filter((x) => x.titel.startsWith('Versandprofil')).map((x) => x.body.profileId), [9, 26]);
+  assert.deepEqual(nach('Eigenschaft 11').body.relationValues, [{ lang: '0', value: '13' }]);
+  assert.ok(plan.hinweise.some((h) => /Einkaufspreis: Variante 644.11, Lieferant 579.5/.test(h)));
+
+  const klon = nach('Original 772160 klonen');
+  assert.equal(klon.endpoint, '/api/_action/clone/product/a1');
+  const o = klon.body.overwrites;
+  assert.equal(o.name, '[Zweite Wahl] Miele H 2861-1 B 125 Edition Einbau-Backofen Edelstahl/CleanSteel');
+  assert.equal(o.active, false); assert.equal(o.stock, 1); assert.equal(o.isCloseout, true); assert.equal(o.releaseDate, '2026-10-07');
+  assert.equal(o.price[0].gross, 864.99, 'Normalfall: Mindestpreis 865 − 0 %');
+  assert.equal(o.price[0].net, 726.8852, 'netto mit demselben Steuersatz wie das Original');
+  assert.equal(o.price[0].listPrice.gross, 1149);
+  assert.equal(o.customFields.custom_secondhand_condition, 'likenew');
+  assert.equal(o.description, '<p><strong>Zweite Wahl (Neuwertig):</strong> Nur Karton beschädigt</p><p>Original-Text</p>');
+  assert.ok(plan.schritte.some((x) => x.method === 'DELETE' && x.endpoint.endsWith('/categories/019f13061667716a9525667c2acb4d56')));
+  assert.ok(plan.schritte.some((x) => x.method === 'DELETE' && x.endpoint.endsWith('/tags/019c75c6b03378f4bb6bb46085c38bdc')));
+  assert.ok(nach('Lager-Bilder als 2. Bild'));
+
+  // Freigabe-Seite zeigt den Plan samt Kommentar und Status (einzige Position → 9.3)
+  const q = link(a.mails[0]);
+  const seite = rufe('freigabe', { query: q }).body;
+  assert.match(seite, /Trockenlauf: \d+ Schreibbefehle \(nicht gesendet\)/);
+  assert.match(seite, /POST \/rest\/items</);
+  assert.match(seite, /4002516769965ZW1/);
+  assert.match(seite, /ZW angelegt: ‹neue Varianten-ID› \(Neuwertig\)/);
+  assert.match(seite, /PUT \/rest\/orders\/241881/);
+  assert.match(seite, /&quot;statusId&quot;: 9\.3/);
+  const fertig = rufe('freigabe-entscheiden', { body: Object.assign({}, q, { entscheidung: 'freigeben' }) }).body;
+  assert.match(fertig, /Trockenlauf/);
+  assert.match(fertig, /ZW angelegt: SIM-1 \(Neuwertig\)/);
+});
+
+test('Trockenlauf: Bestand +1 auf vorhandenen ZW-Artikel, plenty bleibt unberührt', () => {
+  const { k, rufe, anmelden, link } = aufbau();
+  const s = anmelden('lager1', 'Passwort-Lager1');
+  rufe('retoure', { schluessel: s, query: { nr: '241881' } });
+  const a = rufe('anlegen', { schluessel: s, body: { entscheidungen: [{ positionId: '5001', zustand: 'Sehr gut', grund: 'Kleine Delle hinten' }] } });
+  const plan = k.speicher.schreibplaene['5001'];
+  assert.deepEqual(plan.schritte.map((x) => [x.method, x.endpoint, x.body]), [['PATCH', '/api/product/zw2', { stock: 3 }]]);
+  assert.ok(plan.hinweise.some((h) => /plenty: kein Schreibbefehl/.test(h)));
+  assert.match(rufe('freigabe', { query: link(a.mails[0]) }).body, /ZW \+1: 788902 \(Sehr gut\)/);
+});
+
+test('Trockenlauf: fehlt das plenty-Original, zeigt der Plan das an und Anlegen geht trotzdem', () => {
+  const { k, rufe, anmelden } = aufbau();
+  const s = anmelden('lager1', 'Passwort-Lager1');
+  rufe('retoure', { schluessel: s, query: { nr: '241900' } });
+  const gesichert = ORIGINALE[772162];
+  delete ORIGINALE[772162];
+  try {
+    const a = rufe('anlegen', { schluessel: s, body: { entscheidungen: [{ positionId: '5102', zustand: 'Gut', grund: 'Kratzer an der Seite' }] } });
+    assert.equal(a.daten.ergebnisse[0].status, 'wartet');
+    assert.deepEqual(k.speicher.schreibplaene['5102'].fehlt, ['plenty-Daten des Originals 772162']);
+  } finally {
+    ORIGINALE[772162] = gesichert;
+  }
 });

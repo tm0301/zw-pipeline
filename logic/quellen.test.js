@@ -53,11 +53,14 @@ test('Text ohne HTML', () => {
 test('Shopware-Produkt auslesen', () => {
   const k = q.shopwareNachNummer({ data: [{
     id: 'x', productNumber: '772160', name: 'Backofen', ean: '4002516769965',
-    price: [{ gross: 1149, listPrice: { gross: 1299 } }], purchasePrices: [{ gross: 644.11 }], customFields: { custom_price_minprice: '865,00' },
+    price: [{ currencyId: 'eur', gross: 1149, net: 965.546, listPrice: { gross: 1299 } }], purchasePrices: [{ gross: 644.11 }], customFields: { custom_price_minprice: '865,00' },
+    stock: 0, isCloseout: false, categoryIds: ['kat', '019f13061667716a9525667c2acb4d56'], tagIds: ['019c75c6b03378f4bb6bb46085c38bdc'],
   }] });
   assert.deepEqual(k['772160'], {
     id: 'x', produktnummer: '772160', name: 'Backofen', ean: '4002516769965', preis: 1149, streichpreisAktuell: 1299,
-    mindestpreis: 865, einkaufspreis: 644.11, zustand: null, nichtUebernehmen: [],
+    mindestpreis: 865, einkaufspreis: 644.11, zustand: null, nichtUebernehmen: ['Kategorie Summer Sale', 'Tag flash sale'],
+    beschreibung: null, bestand: 0, abverkauf: false, waehrungId: 'eur', nettoFaktor: 965.546 / 1149,
+    saleKategorieIds: ['019f13061667716a9525667c2acb4d56'], saleTagIds: ['019c75c6b03378f4bb6bb46085c38bdc'],
   });
   assert.deepEqual(q.shopwareNachNummer({ error: 'x' }), {});
 });
@@ -65,4 +68,18 @@ test('Shopware-Produkt auslesen', () => {
 test('plenty-Fehler erkennen', () => {
   assert.equal(q.plentyFehler([{ entries: [] }, []]), null);
   assert.equal(q.plentyFehler([{ error: 'Unauthorized' }]), 'Unauthorized');
+});
+
+test('Shopware-Suche: mit EAN auch vorhandene ZW-Artikel, ohne EAN nur Originale', () => {
+  assert.deepEqual(q.shopwareSuche(['1', '1']).filter, [{ type: 'equalsAny', field: 'productNumber', value: ['1'] }]);
+  const mit = q.shopwareSuche(['1'], ['4002516769965']);
+  assert.equal(mit.filter[0].type, 'multi');
+  assert.equal(mit.limit, 100);
+  assert.ok(mit.includes.product.includes('description'));
+  assert.deepEqual(q.shopwareSuche([]), q.LEER_SHOPWARE);
+});
+
+test('Artikel-IDs der Originale in fester Reihenfolge, ohne Doppelte', () => {
+  assert.deepEqual(q.artikelIdsAus({ entries: [{ itemId: 5 }, { itemId: 3 }, { itemId: 5 }, { itemId: null }] }), ['5', '3']);
+  assert.deepEqual(q.anfrageArtikel(5).map((x) => x.endpoint), ['/rest/items/5', '/rest/items/5/item_shipping_profiles']);
 });

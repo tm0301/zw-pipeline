@@ -1,6 +1,7 @@
 // Ablauf der ZW-Station: verteilt jede Anfrage an die passende Aktion.
-// Stand Phase 5: Retouren, Artikel und Preise kommen echt aus plenty und Shopware (nur lesend).
+// Stand Phase 6.0: Retouren, Artikel und Preise kommen echt aus plenty und Shopware (nur lesend).
 // Anlegen wird nur nachgestellt: nichts wird in plenty oder Shopware geschrieben („Probelauf“).
+// Trockenlauf: Beim Anlegen werden alle Schreibbefehle mit echten Daten gebaut und auf der Freigabe-Seite gezeigt, nicht gesendet.
 // Der Zustand (Protokoll, offene Freigaben, ZW-Liste, Zwischenspeicher) liegt im Speicher des Workflows.
 // Beim Bauen des n8n-Workflows wird alles zwischen NUR-NODE-ANFANG und NUR-NODE-ENDE entfernt.
 //
@@ -17,8 +18,9 @@ const {
 const { passwortPruefen, signatur, schluesselAusstellen, schluesselPruefen, gleich, sha256, utf8, bytesZuHex } = require('./anmeldung.js');
 const {
   LEER_PLENTY, LEER_SHOPWARE, retourenNummer, anfrageRetourenListe, anfrageRetoure, anfrageVarianten, anfrageBarcode, shopwareSuche,
-  plentyFehler, eintraege, artikelPositionen, rabattPositionen, shopAuftrag, eanAusVariante, textOhneHtml, shopwareNachNummer,
+  anfrageOriginale, anfrageArtikel, artikelIdsAus, plentyFehler, eintraege, artikelPositionen, rabattPositionen, shopAuftrag, eanAusVariante, textOhneHtml, shopwareNachNummer,
 } = require('./quellen.js');
+const { zwSchreibplan, retoureBefehle, schreibplanHtml, NEU_VARIANTE } = require('./schreibplan.js');
 // NUR-NODE-ENDE
 
 const ERLEDIGT = ['angelegt', 'plus1', 'nicht_verkaufbar', 'kein_zw'];
@@ -32,6 +34,8 @@ const DATEN_AKTIONEN = ['retouren', 'retoure', 'vorschau', 'anlegen'];
 const BILDER_MAX = 3;
 const BILD_MAX_ZEICHEN = 2500000;
 const BILD_TYPEN = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
+// Trockenlauf: so viele Schreibpläne bleiben gespeichert (die ältesten fallen weg)
+const MAX_SCHREIBPLAENE = 50;
 
 // ---------- Einstieg ----------
 
@@ -77,14 +81,25 @@ function zwVorbereiten(anfrage, k) {
     const entscheidungen = Array.isArray(body.entscheidungen) ? body.entscheidungen.slice(0, 50) : [];
     const barcodes = [];
     const varianten = [];
+    const eans = [];
     for (const x of entscheidungen) {
       const pos = speicher.cache.positionen[String(x.positionId || '')];
       if (!pos || !pos.ean || !istZwZustand(String(x.zustand || ''))) continue;
       for (const code of [zwBarcode(pos.ean, x.zustand), pos.ean + 'ZW']) if (!barcodes.includes(code)) barcodes.push(code);
       varianten.push(pos.varianteId);
+      eans.push(pos.ean);
     }
     if (!barcodes.length) return { weiter: 'logik' };
-    return { weiter: 'daten', plan: { art: route.aktion, barcodes }, plenty: barcodes.map(anfrageBarcode), shopware: shopwareSuche(varianten) };
+    if (route.aktion === 'vorschau') {
+      return { weiter: 'daten', plan: { art: 'vorschau', barcodes }, plenty: barcodes.map(anfrageBarcode), shopware: shopwareSuche(varianten) };
+    }
+    // Anlegen: zusätzlich das plenty-Original mit allen Feldern (Runde B: Artikel und Versandprofile)
+    // und in Shopware alle Artikel mit derselben EAN (vorhandene ZW-Artikel). Für den Trockenlauf.
+    const ids = [...new Set(varianten)];
+    return {
+      weiter: 'daten', plan: { art: 'anlegen', barcodes, originale: true },
+      plenty: barcodes.map(anfrageBarcode).concat([anfrageOriginale(ids)]), shopware: shopwareSuche(varianten, eans),
+    };
   } catch (err) {
     return { weiter: 'logik' };
   }
@@ -95,6 +110,11 @@ function zwRundeB(plan, antwortenA) {
   if (plan && plan.art === 'retoure' && !plentyFehler(antwortenA) && antwortenA[0]) {
     const ids = [...new Set(artikelPositionen(antwortenA[0]).map((p) => p.varianteId))];
     if (ids.length) return [anfrageVarianten(ids)];
+  }
+  // Trockenlauf: Artikel und Versandprofile der Originale (je zwei Abfragen pro Artikel)
+  if (plan && plan.art === 'anlegen' && plan.originale && !plentyFehler(antwortenA)) {
+    const ids = artikelIdsAus(antwortenA[plan.barcodes.length]).slice(0, 25);
+    if (ids.length) return [].concat(...ids.map(anfrageArtikel));
   }
   return [LEER_PLENTY];
 }
@@ -180,13 +200,18 @@ function html(status, titel, inhalt) {
     body: '<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">' +
       '<title>' + esc(titel) + '</title><style>' +
       'body{font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;background:#eef1f3;color:#16212b;margin:0;padding:24px 16px}' +
-      '.k{max-width:560px;margin:0 auto;background:#fff;border:1px solid #d5dde3;border-radius:14px;padding:24px}' +
+      '.k{max-width:760px;margin:0 auto;background:#fff;border:1px solid #d5dde3;border-radius:14px;padding:24px}' +
       'h1{font-size:1.3rem;margin:0 0 12px}table{border-collapse:collapse;width:100%;margin:12px 0}' +
       'td{padding:6px 8px;border-bottom:1px solid #d5dde3;vertical-align:top}td:first-child{color:#5b6b78;white-space:nowrap}' +
       '.w{background:#fdf0da;color:#9a5a00;padding:8px 12px;border-radius:8px;margin:8px 0}' +
+      '.i{background:#e8f1fb;color:#1f4f7a;padding:8px 12px;border-radius:8px;margin:8px 0}.m{color:#5b6b78;font-size:.9rem}' +
+      'h2{font-size:1.1rem;margin:28px 0 8px;padding-top:16px;border-top:1px solid #d5dde3}.plan{padding-left:22px}.plan li{margin:0 0 14px}' +
+      'code{font:600 .85rem ui-monospace,Menlo,monospace;word-break:break-all}' +
+      'pre{font:.78rem/1.4 ui-monospace,Menlo,monospace;background:#f4f6f8;border:1px solid #d5dde3;border-radius:8px;padding:8px;overflow-x:auto;margin:6px 0;white-space:pre-wrap;word-break:break-all}' +
       'form{display:flex;gap:12px;flex-wrap:wrap;margin-top:16px}button{font:600 1rem system-ui,sans-serif;padding:14px 22px;border-radius:10px;cursor:pointer}' +
       '.ja{background:#1d7a46;color:#fff;border:1px solid #1d7a46}.nein{background:#fff;color:#b3261e;border:1px solid #b3261e}' +
-      '@media (prefers-color-scheme:dark){body{background:#0f161c;color:#e6edf2}.k{background:#172129;border-color:#2c3a45}td{border-color:#2c3a45}.nein{background:#172129}}' +
+      '@media (prefers-color-scheme:dark){body{background:#0f161c;color:#e6edf2}.k{background:#172129;border-color:#2c3a45}td{border-color:#2c3a45}.nein{background:#172129}' +
+      'pre{background:#0f161c;border-color:#2c3a45}.i{background:#16304a;color:#cfe3f7}h2{border-color:#2c3a45}}' +
       '</style></head><body><div class="k">' + inhalt + '</div></body></html>',
   };
 }
@@ -432,7 +457,28 @@ function quellenFuerVorschau(k) {
   if (d.shopware && d.shopware.error) abbrechen(502, 'Shopware meldet: ' + (d.shopware.error.message || d.shopware.error));
   const barcodes = {};
   (d.plan.barcodes || []).forEach((code, i) => { barcodes[code] = eintraege(d.a[i]); });
-  return { barcodes, shopware: shopwareNachNummer(d.shopware), geholt: true };
+  return { barcodes, shopware: shopwareNachNummer(d.shopware), originale: originaleLesen(d), geholt: true };
+}
+
+// Trockenlauf: plenty-Original pro Varianten-ID mit Artikel und Versandprofilen. Fehlt etwas, bleibt es leer
+// (der Schreibplan zeigt dann, was fehlt). Anlegen wird dadurch nicht blockiert.
+function originaleLesen(d) {
+  const karte = {};
+  if (!d.plan.originale) return karte;
+  const antwort = d.a[d.plan.barcodes.length];
+  const artikelIds = artikelIdsAus(antwort).slice(0, 25);
+  const bOk = !plentyFehler(d.b);
+  const artikel = {};
+  artikelIds.forEach((id, i) => {
+    const a = bOk ? (d.b || [])[2 * i] : null;
+    const versand = bOk ? (d.b || [])[2 * i + 1] : null;
+    if (a && String(a.id) === id) artikel[id] = { artikel: a, versandprofile: Array.isArray(versand) ? versand : eintraege(versand) };
+  });
+  for (const v of eintraege(antwort)) {
+    const a = artikel[String(v.itemId)] || {};
+    karte[String(v.id)] = { variante: v, artikel: a.artikel || null, versandprofile: a.versandprofile || [] };
+  }
+  return karte;
 }
 
 function vorschauPosition(speicher, positionId, zustand, e, quellen) {
@@ -598,6 +644,11 @@ function anlegen(speicher, body, e, person, jetzt, url, quellen) {
     v.bilder = x.bilder.length;
     preisSetzen(v, x.lagerPreis);
     const versuch = (bisher.versuch || 0) + 1;
+    schreibplanMerken(speicher, x.positionId, versuch, zwSchreibplan(v, {
+      plenty: (quellen.originale || {})[v.originalVarianteId] || null,
+      shopware: quellen.shopware[v.originalVarianteId] || null,
+      shopwareZw: v.bestehendeVarianteId ? quellen.shopware[v.bestehendeVarianteId] || null : null,
+    }, jetzt));
     const st = Object.assign({ status: 'wartet', versuch, vorschau: v }, gemeinsam);
     speicher.positionen[x.positionId] = st;
     protokollieren(speicher, jetzt, { benutzer: person.benutzer, aktion: 'freigabe-angefragt', retoureId: pos.retoureId, positionId: x.positionId, zustand: x.zustand, preis: v.preis, ergebnis: 'wartet' });
@@ -628,6 +679,7 @@ function freigabeMail(speicher, v, person, versuch, basisUrl, g, e, an) {
     html: '<p>' + esc(person.name) + ' möchte einen ZW-Artikel anlegen. <b>Probelauf:</b> Daten sind echt, angelegt wird aber noch nichts in plenty oder Shopware.</p>' +
       '<table cellpadding="6" style="border-collapse:collapse">' + vorschauZeilen(speicher, v) + '</table>' +
       (v.warnungen.length ? '<p style="color:#9a5a00"><b>Warnung:</b> ' + v.warnungen.map(esc).join('<br>') + '</p>' : '') +
+      '<p><b>Trockenlauf:</b> Die Schreibbefehle für plenty und Shopware stehen auf der Freigabe-Seite. Gesendet wird nichts.</p>' +
       '<p><a href="' + esc(link) + '" style="display:inline-block;background:#1f5f8b;color:#fff;padding:12px 20px;border-radius:8px;text-decoration:none;font-weight:600">Freigeben oder ablehnen</a></p>' +
       '<p style="color:#5b6b78;font-size:13px">Der Link öffnet eine Seite mit den Knöpfen Freigeben und Ablehnen. Erst der Klick dort zählt.</p>',
   };
@@ -704,7 +756,36 @@ function freigabeSeite(q, e, speicher) {
     '<input type="hidden" name="p" value="' + esc(f.positionId) + '"><input type="hidden" name="n" value="' + f.versuch + '">' +
     '<input type="hidden" name="s" value="' + esc(q.s) + '">' +
     '<button class="ja" name="entscheidung" value="freigeben">Freigeben</button>' +
-    '<button class="nein" name="entscheidung" value="ablehnen">Ablehnen</button></form>');
+    '<button class="nein" name="entscheidung" value="ablehnen">Ablehnen</button></form>' +
+    schreibplanHtml(schreibplan(speicher, f.positionId, f.versuch), retoureBefehle(v.retoureId,
+      zwKommentar({ zustand: v.zustand, varianteId: v.neu ? NEU_VARIANTE : v.bestehendeVarianteId, plus1: !v.neu, grund: v.grund }),
+      statusWennFertig(speicher, v.retoureId, f.positionId, e))));
+}
+
+// ---------- Trockenlauf: Schreibpläne ----------
+
+function schreibplanMerken(speicher, positionId, versuch, plan) {
+  if (!speicher.schreibplaene) speicher.schreibplaene = {};
+  const sp = speicher.schreibplaene;
+  delete sp[positionId];
+  sp[positionId] = Object.assign({ versuch }, plan);
+  const schluessel = Object.keys(sp);
+  for (const k of schluessel.slice(0, Math.max(0, schluessel.length - MAX_SCHREIBPLAENE))) delete sp[k];
+}
+
+function schreibplan(speicher, positionId, versuch) {
+  const p = (speicher.schreibplaene || {})[positionId];
+  return p && p.versuch === versuch ? p : null;
+}
+
+// Status, auf den die Retoure ginge, wenn diese Position jetzt erledigt wird (sonst null)
+function statusWennFertig(speicher, retoureId, positionId, e) {
+  const r = speicher.cache.retouren[retoureId];
+  if (!r || !r.positionIds.length) return null;
+  const rest = r.positionIds.filter((p) => p !== positionId);
+  if (!rest.every((p) => ERLEDIGT.includes(positionsStatus(speicher, p).status))) return null;
+  const nichtVerkaufbar = rest.some((p) => positionsStatus(speicher, p).status === 'nicht_verkaufbar');
+  return nichtVerkaufbar ? String(e.statusNichtVerkaufbar || '9.1.3') : String(e.statusFertig || '9.3');
 }
 
 function freigabeEntscheiden(body, e, speicher, jetzt) {
@@ -743,6 +824,7 @@ function freigabeEntscheiden(body, e, speicher, jetzt) {
     varianteId = zw.varianteId;
   }
   const kommentar = zwKommentar({ zustand: v.zustand, varianteId, plus1, grund: v.grund });
+  const neuerStatus = statusWennFertig(speicher, retoureId, f.positionId, e);
   kommentarSim(speicher, retoureId, zeit, kommentar);
   speicher.zwListe.push({
     id: 'Z' + (sim.naechsteZeile++), datum: zeit.slice(0, 10), retoureId, originalVarianteId: v.originalVarianteId,
@@ -755,7 +837,8 @@ function freigabeEntscheiden(body, e, speicher, jetzt) {
   });
   protokollieren(speicher, jetzt, { benutzer: von, aktion: 'freigabe', retoureId, positionId: f.positionId, zustand: v.zustand, ergebnis: plus1 ? 'plus1' : 'angelegt', varianteId, preis: v.preis });
   retoureAbschliessenWennFertig(speicher, retoureId, jetzt, e);
-  return html(200, 'Freigegeben', '<h1>Freigegeben</h1><p>' + esc(kommentar) + '</p><p>Probelauf: nachgestellt, nichts in plenty oder Shopware geändert.</p>');
+  return html(200, 'Freigegeben', '<h1>Freigegeben</h1><p>' + esc(kommentar) + '</p><p>Probelauf: nachgestellt, nichts in plenty oder Shopware geändert.</p>' +
+    schreibplanHtml(schreibplan(speicher, f.positionId, f.versuch), retoureBefehle(retoureId, kommentar, neuerStatus)));
 }
 
 function retoureAbschliessenWennFertig(speicher, retoureId, jetzt, e) {

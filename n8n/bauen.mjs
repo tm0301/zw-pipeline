@@ -19,7 +19,7 @@ function fuerN8n(quelle) {
     .replace(/\nif \(typeof module !== 'undefined' && module\.exports\) \{[\s\S]*?\n\}\n?$/, '\n');
 }
 
-const logik = ['logic/zw-logik.js', 'logic/anmeldung.js', 'logic/quellen.js', 'logic/ablauf.js'].map((p) => fuerN8n(lies(p))).join('\n');
+const logik = ['logic/zw-logik.js', 'logic/anmeldung.js', 'logic/quellen.js', 'logic/schreibplan.js', 'logic/ablauf.js'].map((p) => fuerN8n(lies(p))).join('\n');
 
 // Die kleinen Bausteine (Vorbereiten, Runde B planen, Mailergebnis) bekommen nur die Teile, die sie brauchen:
 // ausgehend von der Einstiegsfunktion alle Funktionen und Konstanten, die darin vorkommen (und deren Teile).
