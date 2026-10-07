@@ -7,36 +7,49 @@ Projektseite (verbindlich): Notion „Projekt: ZW-Pipeline (Zweite-Wahl-Artikel 
 
 ## Stand
 
-**Probelauf** mit Beispieldaten. Anmeldung, Vorschau, Anlegen, Freigabe-Mail und Protokoll laufen echt in n8n.
-plenty und Shopware werden nur nachgestellt. Einrichten: [docs/einrichten.md](docs/einrichten.md).
+**Probelauf mit echten Daten (nur lesend).** Retouren (Status 9.1.1), Artikel, EAN und Kommentare kommen aus plenty,
+Preise und Mindestpreise aus Shopware. Anmeldung, Vorschau, Freigabe-Mail, ZW-Liste und Protokoll laufen echt in n8n.
+Anlegen in plenty und Shopware wird nur nachgestellt (IDs `SIM-…`). Einrichten: [docs/einrichten.md](docs/einrichten.md).
 
 ## Aufbau
 
 ```
 n8n/zw-pipeline-probelauf.json   Import-Datei für n8n (wird gebaut, nicht von Hand ändern)
-n8n/bauen.mjs                    baut die Import-Datei aus logic/, frontend/ und data/
+n8n/bauen.mjs                    baut die Import-Datei aus logic/ und frontend/
 logic/zw-logik.js                Preisregel, Barcode, Nummern, Kommentartexte
 logic/anmeldung.js               Passwort-Hash prüfen, Schlüssel ausstellen (reines JavaScript)
-logic/ablauf.js                  alle Aktionen der Seite (Retouren, Vorschau, Anlegen, Freigabe)
+logic/quellen.js                 Abfragen an plenty und Shopware planen und Antworten auslesen (nur lesend)
+logic/ablauf.js                  alle Aktionen der Seite (Retouren, Vorschau, Anlegen, Freigabe, ZW-Liste)
 frontend/zw-station.html         die Seite für das Lager, ausgeliefert von n8n
-data/beispieldaten.json          Retouren und Artikel für den Probelauf
 docs/                            Anleitungen
 ```
 
 Der Workflow ist **ein** n8n-Workflow mit mehreren Webhooks unter `…/webhook/zw-station/…`:
-Seite, `anmelden`, `retouren`, `retoure`, `vorschau`, `anlegen`, `zw-liste`, `zuruecksetzen`, `freigabe`, `freigabe-entscheiden`.
-Alle laufen über **Einstellungen → ZW-Logik**. Die Antwort geht erst nach dem Mailversand raus, weil n8n den Stand am Ende jedes Laufs speichert.
+Seite, `anmelden`, `retouren`, `retoure`, `vorschau`, `anlegen`, `zw-liste`, `zw-liste-buchen`, `zuruecksetzen`, `freigabe`, `freigabe-entscheiden`.
+
+```
+Webhook → Einstellungen → Vorbereiten → Daten nötig?
+   ja:   plenty A → Runde B planen → plenty B → Shopware lesen → ZW-Logik
+   nein: ZW-Logik
+ZW-Logik → Mails da? → Freigabe-Mail senden → Mailergebnis → Antwort senden
+```
+
+„Vorbereiten“ prüft die Anmeldung und plant die Abfragen. Ohne gültige Anmeldung wird nichts abgefragt.
+plenty läuft über den PlentyONE-Baustein (mehrere GET-Abfragen auf einmal), Shopware über eine Produktsuche.
+Die Antwort geht erst nach dem Mailversand raus, weil n8n den Stand am Ende jedes Laufs speichert.
+
+Testlauf direkt in n8n (ohne Webhook-Adresse): Die Aktion steht dann in `body.aktion`, z. B. `{"aktion":"retouren"}`.
 
 ## Entwickeln
 
 Node 22 oder neuer.
 
 ```bash
-npm test          # Tests: Preisregel mit den Prüfbeispielen, Anmeldung, kompletter Ablauf
+npm test          # Tests: Preisregel, Anmeldung, Auslesen der plenty/Shopware-Antworten, kompletter Ablauf
 npm run bauen     # baut n8n/zw-pipeline-probelauf.json neu
 ```
 
-Nach jeder Änderung an `logic/`, `frontend/` oder `data/` neu bauen und die JSON mit committen.
+Nach jeder Änderung an `logic/` oder `frontend/` neu bauen und die JSON mit committen.
 
 ## Regeln
 

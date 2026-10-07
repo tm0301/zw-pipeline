@@ -1,6 +1,7 @@
 // Baut den n8n-Workflow „ZW-Pipeline (Probelauf)“ als Import-Datei.
 // Aufruf: node n8n/bauen.mjs  →  n8n/zw-pipeline-probelauf.json
-// Die Logik (logic/), die Seite (frontend/) und die Beispieldaten (data/) werden in die Code-Bausteine kopiert.
+// Die Logik (logic/) und die Seite (frontend/) werden in die Code-Bausteine kopiert.
+// plenty und Shopware werden nur gelesen: über die vorhandenen Zugänge (PlentyONE-Baustein, HTTP-Baustein mit OAuth2).
 // Bitte nicht die JSON von Hand ändern, sondern die Quellen und dann neu bauen.
 
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -18,28 +19,55 @@ function fuerN8n(quelle) {
     .replace(/\nif \(typeof module !== 'undefined' && module\.exports\) \{[\s\S]*?\n\}\n?$/, '\n');
 }
 
-const logik = ['logic/zw-logik.js', 'logic/anmeldung.js', 'logic/ablauf.js'].map((p) => fuerN8n(lies(p))).join('\n');
+const logik = ['logic/zw-logik.js', 'logic/anmeldung.js', 'logic/quellen.js', 'logic/ablauf.js'].map((p) => fuerN8n(lies(p))).join('\n');
+// Kleinere Bausteine brauchen nur einen Teil: Runde B nur Abfragen und Ablauf, Mailergebnis nur den Ablauf.
+const nurQuellenUndAblauf = ['logic/quellen.js', 'logic/ablauf.js'].map((p) => fuerN8n(lies(p))).join('\n');
+const nurAblauf = fuerN8n(lies('logic/ablauf.js'));
 const seite = lies('frontend/zw-station.html');
-const beispieldaten = JSON.parse(lies('data/beispieldaten.json'));
-const version = createHash('sha256').update(logik + seite + JSON.stringify(beispieldaten)).digest('hex').slice(0, 10);
+const version = createHash('sha256').update(logik + seite).digest('hex').slice(0, 10);
 
 const KOPF = '// ZW-Pipeline · erzeugt von n8n/bauen.mjs · Version ' + version + '\n' +
   '// Nicht hier ändern: Änderungen im Repo machen und neu bauen.\n\n';
 
+// Zugänge, die es in n8n schon gibt (nur lesend). Name und ID aus n8n, keine Geheimnisse.
+const ZUGANG_PLENTY = { plentymarketsApi: { id: 'mF2triRKwGA42wpL', name: 'PlentyONE Tobi - read all' } };
+const ZUGANG_SHOPWARE = { oAuth2Api: { id: 'YTk8Iq3jR4bhXcEI', name: 'SWMK_n8n_products_test read_only' } };
+const SHOPWARE_SUCHE = 'https://mykitchens.de/api/search/product';
+
+const ANFRAGE = '{ url: anfrage.webhookUrl, query: anfrage.query, body: anfrage.body, headers: anfrage.headers }';
+
+const codeVorbereiten = KOPF + logik + '\n' +
+  '// ---------- Aufruf durch n8n: Welche Daten braucht diese Anfrage? ----------\n' +
+  'const anfrage = $input.first().json;\n' +
+  'const plan = zwVorbereiten(' + ANFRAGE + ', {\n' +
+  '  einstellungen: anfrage.einstellungen || {}, speicher: $getWorkflowStaticData(\'global\'), jetzt: Date.now(),\n' +
+  '});\n' +
+  'return [{ json: plan }];\n';
+
+const codeRundeB = KOPF + nurQuellenUndAblauf + '\n' +
+  '// ---------- Aufruf durch n8n: Abfragen für plenty Runde B ----------\n' +
+  'const plan = $(\'Vorbereiten\').first().json.plan;\n' +
+  'return [{ json: { plenty: zwRundeB(plan, $input.all().map((i) => i.json)) } }];\n';
+
 const codeLogik = KOPF +
   'const SEITE_HTML = ' + JSON.stringify(seite) + ';\n\n' +
-  'const BEISPIELDATEN = ' + JSON.stringify(beispieldaten) + ';\n\n' +
   logik + '\n' +
   '// ---------- Aufruf durch n8n ----------\n' +
-  'const anfrage = $input.first().json;\n' +
-  'const antwort = zwVerarbeiten(\n' +
-  '  { url: anfrage.webhookUrl, query: anfrage.query, body: anfrage.body, headers: anfrage.headers },\n' +
-  '  {\n' +
-  '    einstellungen: anfrage.einstellungen || {}, speicher: $getWorkflowStaticData(\'global\'), jetzt: Date.now(),\n' +
-  '    seiteHtml: SEITE_HTML, beispieldaten: BEISPIELDATEN,\n' +
-  '    eigenerCode: () => { try { return $(\'ZW-Logik\').params.jsCode; } catch (err) { return null; } },\n' +
-  '  },\n' +
-  ');\n' +
+  '// Die Daten aus plenty und Shopware gibt es nur, wenn „Daten nötig?“ den oberen Weg genommen hat.\n' +
+  'function ausgabe(name) { try { return $(name).all().map((i) => i.json); } catch (err) { return null; } }\n' +
+  'function geholteDaten() {\n' +
+  '  let v;\n' +
+  '  try { v = $(\'Vorbereiten\').first().json; } catch (err) { return null; }\n' +
+  '  if (!v || v.weiter !== \'daten\') return null;\n' +
+  '  const sw = ausgabe(\'Shopware lesen\');\n' +
+  '  return { plan: v.plan, a: ausgabe(\'plenty A\') || [], b: ausgabe(\'plenty B\') || [], shopware: sw && sw[0] ? sw[0] : null };\n' +
+  '}\n' +
+  'const anfrage = $(\'Einstellungen\').first().json;\n' +
+  'const antwort = zwVerarbeiten(' + ANFRAGE + ', {\n' +
+  '  einstellungen: anfrage.einstellungen || {}, speicher: $getWorkflowStaticData(\'global\'), jetzt: Date.now(),\n' +
+  '  seiteHtml: SEITE_HTML, daten: geholteDaten(),\n' +
+  '  eigenerCode: () => { try { return $(\'ZW-Logik\').params.jsCode; } catch (err) { return null; } },\n' +
+  '});\n' +
   'return [{ json: antwort }];\n';
 
 const codeMailsAufteilen = KOPF +
@@ -47,7 +75,7 @@ const codeMailsAufteilen = KOPF +
   'const mails = $input.first().json.mails || [];\n' +
   'return mails.map((m) => ({ json: m }));\n';
 
-const codeMailergebnis = KOPF + logik + '\n' +
+const codeMailergebnis = KOPF + nurAblauf + '\n' +
   '// Mails, die nicht rausgingen, als Fehler vermerken (das Lager kann neu anlegen). Danach antwortet „Antwort senden“.\n' +
   'const antwort = zwNachMailversand(\n' +
   '  $(\'ZW-Logik\').first().json,\n' +
@@ -71,6 +99,7 @@ const WEBHOOKS = [
   ['Vorschau (POST)', 'POST', 'zw-station/vorschau'],
   ['Anlegen (POST)', 'POST', 'zw-station/anlegen'],
   ['ZW-Liste (GET)', 'GET', 'zw-station/zw-liste'],
+  ['ZW-Liste buchen (POST)', 'POST', 'zw-station/zw-liste-buchen'],
   ['Zurücksetzen (POST)', 'POST', 'zw-station/zuruecksetzen'],
   ['Freigabe-Seite (GET)', 'GET', 'zw-station/freigabe'],
   ['Freigabe entscheiden (POST)', 'POST', 'zw-station/freigabe-entscheiden'],
@@ -119,16 +148,71 @@ nodes.push({
     options: {},
   },
   id: id('Einstellungen'), name: 'Einstellungen', type: 'n8n-nodes-base.set', typeVersion: 3.4,
-  position: [300, mitte],
+  position: [280, mitte],
   notes: 'Hier alles eintragen, was sich ändern darf: Prozente, Status, E-Mail, Benutzer, Geheimschlüssel. Siehe docs/einrichten.md im Repo.',
   notesInFlow: true,
 });
-verbinde('Einstellungen', 'ZW-Logik');
+verbinde('Einstellungen', 'Vorbereiten');
+
+const code = (name, jsCode, position) => nodes.push({
+  parameters: { jsCode }, id: id(name), name, type: 'n8n-nodes-base.code', typeVersion: 2, position,
+});
+const plenty = (name, position) => nodes.push({
+  parameters: { resource: 'custom', operation: 'custom.jsonDefinition', requestJson: '={{ $json.plenty }}' },
+  id: id(name), name, type: 'n8n-nodes-plentyone.Plentymarkets', typeVersion: 1, position,
+  credentials: ZUGANG_PLENTY, onError: 'continueRegularOutput', alwaysOutputData: true,
+  notes: 'Nur lesende Abfragen (GET). Welche, plant der Baustein davor.', notesInFlow: true,
+});
+
+code('Vorbereiten', codeVorbereiten, [520, mitte]);
+verbinde('Vorbereiten', 'Daten nötig?');
+
+nodes.push({
+  parameters: {
+    conditions: {
+      options: { caseSensitive: true, leftValue: '', typeValidation: 'strict' },
+      conditions: [{
+        id: id('bedingung|daten'),
+        leftValue: '={{ $json.weiter === \'daten\' }}',
+        rightValue: '',
+        operator: { type: 'boolean', operation: 'true', singleValue: true },
+      }],
+      combinator: 'and',
+    },
+    options: {},
+  },
+  id: id('Daten nötig?'), name: 'Daten nötig?', type: 'n8n-nodes-base.if', typeVersion: 2,
+  position: [740, mitte],
+});
+verbinde('Daten nötig?', 'plenty A', 0);
+verbinde('Daten nötig?', 'ZW-Logik', 1);
+
+plenty('plenty A', [960, mitte - 220]);
+verbinde('plenty A', 'Runde B planen');
+code('Runde B planen', codeRundeB, [1180, mitte - 220]);
+verbinde('Runde B planen', 'plenty B');
+plenty('plenty B', [1400, mitte - 220]);
+verbinde('plenty B', 'Shopware lesen');
+
+nodes.push({
+  parameters: {
+    method: 'POST', url: SHOPWARE_SUCHE,
+    authentication: 'genericCredentialType', genericAuthType: 'oAuth2Api',
+    sendBody: true, contentType: 'json', specifyBody: 'json',
+    jsonBody: '={{ JSON.stringify($(\'Vorbereiten\').first().json.shopware) }}',
+    options: {},
+  },
+  id: id('Shopware lesen'), name: 'Shopware lesen', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2,
+  position: [1620, mitte - 220], credentials: ZUGANG_SHOPWARE,
+  onError: 'continueRegularOutput', alwaysOutputData: true, executeOnce: true,
+  notes: 'Nur Suche (lesend): Preise und Mindestpreise der Originale.', notesInFlow: true,
+});
+verbinde('Shopware lesen', 'ZW-Logik');
 
 nodes.push({
   parameters: { jsCode: codeLogik },
   id: id('ZW-Logik'), name: 'ZW-Logik', type: 'n8n-nodes-base.code', typeVersion: 2,
-  position: [560, mitte],
+  position: [1840, mitte],
 });
 verbinde('ZW-Logik', 'Mails da?');
 
@@ -148,7 +232,7 @@ nodes.push({
     options: {},
   },
   id: id('Mails da?'), name: 'Mails da?', type: 'n8n-nodes-base.if', typeVersion: 2,
-  position: [800, mitte],
+  position: [2060, mitte],
 });
 verbinde('Mails da?', 'Freigabe-Mails aufteilen', 0);
 verbinde('Mails da?', 'Antwort senden', 1);
@@ -156,7 +240,7 @@ verbinde('Mails da?', 'Antwort senden', 1);
 nodes.push({
   parameters: { jsCode: codeMailsAufteilen },
   id: id('Freigabe-Mails aufteilen'), name: 'Freigabe-Mails aufteilen', type: 'n8n-nodes-base.code', typeVersion: 2,
-  position: [1040, mitte - 160],
+  position: [2280, mitte - 160],
 });
 verbinde('Freigabe-Mails aufteilen', 'Freigabe-Mail senden');
 
@@ -170,7 +254,7 @@ nodes.push({
     options: { appendAttribution: false },
   },
   id: id('Freigabe-Mail senden'), name: 'Freigabe-Mail senden', type: 'n8n-nodes-base.emailSend', typeVersion: 2.1,
-  position: [1280, mitte - 160], onError: 'continueRegularOutput',
+  position: [2500, mitte - 160], onError: 'continueRegularOutput',
   notes: 'E-Mail-Zugang (Credential) hier auswählen.', notesInFlow: true,
 });
 verbinde('Freigabe-Mail senden', 'Mailergebnis');
@@ -178,7 +262,7 @@ verbinde('Freigabe-Mail senden', 'Mailergebnis');
 nodes.push({
   parameters: { jsCode: codeMailergebnis },
   id: id('Mailergebnis'), name: 'Mailergebnis', type: 'n8n-nodes-base.code', typeVersion: 2,
-  position: [1520, mitte - 160],
+  position: [2720, mitte - 160],
 });
 verbinde('Mailergebnis', 'Antwort senden');
 
@@ -200,7 +284,7 @@ nodes.push({
     },
   },
   id: id('Antwort senden'), name: 'Antwort senden', type: 'n8n-nodes-base.respondToWebhook', typeVersion: 1.1,
-  position: [1760, mitte],
+  position: [2940, mitte],
 });
 
 const workflow = {

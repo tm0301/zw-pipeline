@@ -1,7 +1,11 @@
 # ZW-Pipeline in n8n einrichten (Probelauf)
 
 Dauer: etwa 15 Minuten. Im Probelauf wird **nichts** in plenty oder Shopware geändert.
-Die Seite arbeitet mit Beispieldaten (`data/beispieldaten.json`). Echt sind nur die Anmeldung und die Freigabe-Mails.
+Retouren, Artikel und Preise kommen echt aus plenty und Shopware, aber **nur lesend**.
+Anlegen (neuer ZW-Artikel, Bestand +1, Kommentar, Status 9.3) wird nur nachgestellt.
+
+Der Workflow ist schon in n8n eingespielt (Projekt „Sandbox & Test“, Ordner „Zweite Wahl“). Die Schritte unten
+braucht es nur bei einem neuen Import.
 
 ## 1. Workflow importieren
 
@@ -9,12 +13,17 @@ Die Seite arbeitet mit Beispieldaten (`data/beispieldaten.json`). Echt sind nur 
 2. Oben rechts im Menü **…** → **Import from File** und `n8n/zw-pipeline-probelauf.json` aus diesem Repo wählen.
 3. Speichern. Der Workflow heißt **ZW-Pipeline (Probelauf)**.
 
-## 2. E-Mail-Zugang wählen
+## 2. Zugänge prüfen
 
-Doppelklick auf **Freigabe-Mail senden** → bei **Credential** deinen E-Mail-Zugang (SMTP) auswählen.
+Die Zugänge (Credentials) legt die IT an. Im Workflow sind diese eingetragen:
 
-Falls dein Zugang ein Gmail- oder Outlook-Zugang ist (kein SMTP): Sag mir Bescheid, dann tausche ich den Baustein
-gegen „Gmail → Send“ bzw. „Microsoft Outlook → Send“ aus.
+| Baustein | Zugang |
+|---|---|
+| **plenty A**, **plenty B** | PlentyONE Tobi - read all (nur lesen) |
+| **Shopware lesen** | SWMK_n8n_products_test read_only |
+| **Freigabe-Mail senden** | E-Mail-Zugang (SMTP) |
+
+Fehlt ein Zugang nach dem Import, im Baustein bei **Credential** auswählen.
 
 ## 3. Veröffentlichen und Seite öffnen
 
@@ -42,7 +51,7 @@ Doppelklick auf **Einstellungen**:
 | `einstellungen.geheimSchluessel` | **leer lassen.** Der Workflow erzeugt beim ersten Aufruf selbst einen und behält ihn. Nur füllen, falls die Seite das ausdrücklich verlangt |
 | `einstellungen.benutzer` | Liste der Zugänge in eckigen Klammern, mit Komma getrennt: `[{"benutzer":"tobias",…},{"benutzer":"lager1",…}]` |
 | `einstellungen.abschlag…` | Prozente der Preisregel. Nur ändern, wenn sich die Regel ändert |
-| `einstellungen.statusOffen` / `statusFertig` | Retouren-Status 9.1.1 und 9.3 |
+| `einstellungen.statusOffen` / `statusFertig` | Retouren-Status 9.1.1 (diese Retouren zeigt die Seite) und 9.3 |
 | `einstellungen.anmeldungMinuten` | Wie lange eine Anmeldung gilt (Standard 600 = 10 Stunden) |
 | `einstellungen.seitenAdresse` | leer lassen (nur nötig, falls die Links in den Mails falsch sind) |
 
@@ -52,19 +61,21 @@ Eine Person sperren: in ihrem Eintrag `"gesperrt":true` ergänzen oder den Eintr
 
 ## 6. Ausprobieren
 
-Mit einem Zugang anmelden und eine Beispiel-Retoure durchspielen:
-50101 (ein Artikel, Normalfall), 50102 (drei Artikel: Sonderfall a, Sonderfall b mit Warnung), 50103 (ein Fehlerfall).
-Die Freigabe-Mail enthält einen Link zu einer Seite mit **Freigeben** und **Ablehnen**.
+Mit einem Zugang anmelden. Die Seite zeigt die echten Retouren im Status 9.1.1.
+Eine Retoure öffnen und pro Artikel einen Zustand wählen: Die Vorschau rechnet den ZW-Preis aus den echten Shopware-Preisen.
+**Anlegen** schickt die Freigabe-Mail. Die Mail enthält einen Link zu einer Seite mit **Freigeben** und **Ablehnen**.
 
 ## Was der Probelauf kann
 
 - Anmeldung pro Person, Abmelden, automatische Abmeldung nach 30 Minuten ohne Nutzung, Sperre nach 5 Fehlversuchen (15 Minuten).
-- Retouren im Status 9.1.1, Suche nach Retouren-Nr.
-- Pro Artikel: Neuwertig · Sehr gut · Gut · Nicht verkaufbar · Kein ZW, mit Vorschau (Preis, Streichpreis, neu oder +1, Warnungen).
+- Echte Retouren im Status 9.1.1 aus plenty, mit Shop-Auftragsnummer und den Kommentaren aus plenty. Suche nach Retouren-Nr.
+- Pro Artikel: Neuwertig · Sehr gut · Gut · Nicht verkaufbar · Kein ZW, mit Vorschau (Preis aus Shopware, Streichpreis,
+  neu oder +1 auf einen vorhandenen ZW-Artikel in plenty, Warnungen).
 - Anlegen → eine Freigabe-Mail pro Artikel → Freigeben oder Ablehnen auf einer Bestätigungsseite.
-- Nachgestellt: neue Varianten-ID, Bestand +1, Kommentar in der Retoure, Status 9.3, Zeile in der ZW-Liste, Protokoll.
-- Fehler (z. B. Original fehlt in Shopware, Mail nicht gesendet) als Kommentar in der Retoure. Die Position kann neu angelegt werden.
-- Admins können den Probelauf unter „ZW-Liste und Protokoll“ zurücksetzen.
+- Nachgestellt: neue Varianten-ID (`SIM-1`, `SIM-2` …), Bestand +1, Kommentar in der Retoure, Status 9.3. In plenty und Shopware ändert sich nichts.
+- Tab **ZW-Liste** (ersetzt die Excel-Liste): alle freigegebenen ZW-Artikel, Knopf **Bestand gebucht**, Suche, Filter, CSV-Export. Darunter das Protokoll.
+- Fehler (z. B. Original fehlt in Shopware, Artikel ohne EAN, Mail nicht gesendet) als Kommentar. Die Position kann neu angelegt werden.
+- Admins können den Probelauf im Tab ZW-Liste zurücksetzen.
 
 ## Datenschutz
 
@@ -75,8 +86,10 @@ Die Freigabe-Mail enthält einen Link zu einer Seite mit **Freigeben** und **Abl
 ## Bekannte Grenzen des Probelaufs
 
 - Der Stand liegt im Speicher des Workflows (Static Data). n8n schreibt ihn erst am Ende jedes Laufs.
-  Laufen zwei Aktionen genau gleichzeitig, kann eine davon verloren gehen. Für den Echtbetrieb kommt das Protokoll in eine n8n Data Table.
+  Laufen zwei Aktionen genau gleichzeitig, kann eine davon verloren gehen. Für den Echtbetrieb kommen ZW-Liste und Protokoll in eine n8n Data Table (Phase 6).
 - Ein erneuter Import der JSON setzt den Probelauf zurück.
+- Testläufe direkt in n8n speichern nichts im Speicher des Workflows. Nur die Seite (Produktions-Adresse) merkt sich den Stand.
+- Der Shopware-Zugang gehört zu einem anderen n8n-Projekt. Fällt er weg, zeigt die Vorschau „Shopware meldet: …“.
 - Kein Error-Workflow: Ein Fehler im Workflow selbst taucht nur in n8n unter **Executions** auf.
 - Erfolgreiche Läufe werden nicht gespeichert, weil sie Passwörter und den Geheimschlüssel enthielten. Fehlgeschlagene Läufe schon.
 - Etikett und Scanner kommen später.

@@ -90,6 +90,16 @@ table { border-collapse: collapse; width: 100%; font-size: .88rem; font-variant-
 th, td { text-align: left; padding: 7px 9px; border-bottom: 1px solid var(--line); white-space: nowrap; }
 th { font-size: .72rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
 td.code { font-family: var(--font-code); }
+.tabs { display: flex; gap: 8px; }
+.tabs button { flex: 1 1 0; min-height: 50px; border-radius: 10px; border: 2px solid var(--line); background: var(--surface); color: var(--fg); font-weight: 600; font-size: 1.02rem; }
+.tabs button[aria-selected="true"] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.filter { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.filter input, .filter select { font: 500 1rem var(--font-ui); padding: 10px 12px; border-radius: 10px; border: 2px solid var(--line); background: var(--surface-2); color: var(--fg); min-width: 0; }
+.filter input { flex: 1 1 200px; }
+td .btn.small { min-height: 36px; padding: 6px 12px; font-size: .88rem; }
+td .gebucht { color: var(--ok); font-weight: 600; }
+.notes { margin: 0; padding: 10px 12px 10px 30px; border-radius: 10px; background: var(--warn-bg); color: var(--fg); font-size: .95rem; }
+.notes small { color: var(--muted); }
 .setup { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
 [hidden] { display: none !important; }
 @media (max-width: 640px) {
@@ -107,7 +117,11 @@ td.code { font-family: var(--font-code); }
     <div class="brand"><h1>ZW-Station</h1><span>Lager · Zweite Wahl</span></div>
     <div class="who" id="who" hidden><span id="who-name"></span><button class="btn ghost small" type="button" id="logout">Abmelden</button></div>
   </header>
-  <p class="banner" id="banner" hidden>Probelauf mit Beispieldaten: Es wird nichts in plenty oder Shopware geändert.</p>
+  <p class="banner" id="banner" hidden>Probelauf: Retouren und Preise kommen echt aus plenty und Shopware (nur gelesen). Anlegen wird nur nachgestellt, es wird nichts in plenty oder Shopware geändert.</p>
+  <nav class="tabs" id="tabs" role="tablist" hidden>
+    <button type="button" role="tab" id="tab-ret" aria-selected="true">Retouren</button>
+    <button type="button" role="tab" id="tab-zw" aria-selected="false">ZW-Liste</button>
+  </nav>
 
   <!-- Anmeldung -->
   <section class="card" id="s-login" hidden>
@@ -134,10 +148,8 @@ td.code { font-family: var(--font-code); }
     </form>
     <textarea id="setup-out" readonly hidden aria-label="Eintrag für die Benutzerliste"></textarea>
     <div class="actions">
-      <button class="btn ghost small" type="button" id="gen-secret">Geheimschlüssel erzeugen</button>
       <button class="linkbtn" type="button" id="close-setup">Zurück zur Anmeldung</button>
     </div>
-    <textarea id="secret-out" readonly hidden aria-label="Geheimschlüssel"></textarea>
   </section>
 
   <!-- Retouren-Liste -->
@@ -149,6 +161,7 @@ td.code { font-family: var(--font-code); }
     </form>
     <p class="error" id="list-error" hidden></p>
     <div class="list" id="ret-list"></div>
+    <p class="hint" id="list-loading" hidden>Retouren werden aus plenty geladen …</p>
     <p class="hint" id="list-empty" hidden>Keine offenen Retouren.</p>
   </section>
 
@@ -159,34 +172,50 @@ td.code { font-family: var(--font-code); }
       <button class="linkbtn" type="button" id="back">← Alle Retouren</button>
     </div>
     <p class="hint" id="ret-meta"></p>
+    <ul class="notes" id="plenty-notes" hidden></ul>
     <div class="list" id="pos-list"></div>
     <p class="error" id="ret-error" hidden></p>
     <div class="actions">
       <span class="hint" id="anlegen-hint"></span>
       <button class="btn" type="button" id="anlegen" disabled>Anlegen</button>
     </div>
-    <details id="ret-comments-wrap" hidden><summary>Kommentare in der Retoure</summary><ul class="comments" id="ret-comments"></ul></details>
+    <details id="ret-comments-wrap" hidden><summary>Kommentare der ZW-Station (Probelauf: nicht in plenty)</summary><ul class="comments" id="ret-comments"></ul></details>
   </section>
 
-  <details class="panel" id="liste-panel" hidden>
-    <summary>ZW-Liste und Protokoll</summary>
+  <!-- ZW-Liste (ersetzt die Excel-Liste) -->
+  <section class="card" id="s-zw" hidden>
+    <h2>ZW-Liste</h2>
+    <p class="hint">Alle freigegebenen ZW-Artikel. Nach dem Umbuchen im Lager „Bestand gebucht“ drücken.</p>
+    <div class="filter">
+      <input id="zw-suche" type="search" placeholder="Suchen: Retoure, Variante, Barcode, Name" aria-label="ZW-Liste durchsuchen">
+      <select id="zw-filter" aria-label="Filter">
+        <option value="offen">Noch nicht gebucht</option>
+        <option value="gebucht">Gebucht</option>
+        <option value="alle">Alle</option>
+      </select>
+      <button class="btn ghost small" type="button" id="zw-csv">CSV herunterladen</button>
+    </div>
+    <p class="error" id="zw-error" hidden></p>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Datum</th><th>Retoure</th><th>ZW-Variante</th><th>Barcode</th><th>Name</th><th>Zustand</th><th>Preis</th><th>Streichpreis</th><th>neu/+1</th></tr></thead>
+        <thead><tr><th>Datum</th><th>Retoure</th><th>ZW-Variante</th><th>Barcode</th><th>Name</th><th>Zustand</th><th>Preis</th><th>Streichpreis</th><th>neu/+1</th><th>Bestand</th></tr></thead>
         <tbody id="zw-liste"></tbody>
       </table>
     </div>
-    <div class="table-wrap">
-      <table>
-        <thead><tr><th>Zeit</th><th>Wer</th><th>Aktion</th><th>Retoure</th><th>Position</th><th>Zustand</th><th>Ergebnis</th></tr></thead>
-        <tbody id="protokoll"></tbody>
-      </table>
-    </div>
+    <details class="panel">
+      <summary>Protokoll (letzte 50 Einträge)</summary>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Zeit</th><th>Wer</th><th>Aktion</th><th>Retoure</th><th>Position</th><th>Zustand</th><th>Ergebnis</th></tr></thead>
+          <tbody id="protokoll"></tbody>
+        </table>
+      </div>
+    </details>
     <div class="actions" id="admin-actions" hidden>
-      <span class="hint">Nur Probelauf: Beispieldaten, Protokoll und ZW-Liste auf Anfang setzen.</span>
+      <span class="hint">Nur Probelauf: Entscheidungen, Protokoll und ZW-Liste auf Anfang setzen. In plenty und Shopware ändert sich nichts.</span>
       <button class="btn ghost small" type="button" id="reset">Probelauf zurücksetzen</button>
     </div>
-  </details>
+  </section>
 </div>
 
 <script>
@@ -201,17 +230,22 @@ td.code { font-family: var(--font-code); }
   var BASIS = location.pathname.replace(/\/+$/, '') + '/';
   var $ = function (id) { return document.getElementById(id); };
   var eur = new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' });
-  var zustand = { schluessel: null, name: '', rolle: '', retoure: null, auswahl: {}, vorschau: {}, abfrage: null, letzteAktivitaet: Date.now() };
+  var zustand = { schluessel: null, name: '', rolle: '', retoure: null, auswahl: {}, vorschau: {}, abfrage: null, letzteAktivitaet: Date.now(), zwListe: [], tab: 'ret' };
 
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
   function speichern(k, v) { try { if (v == null) sessionStorage.removeItem(k); else sessionStorage.setItem(k, v); } catch (e) {} }
   function lesen(k) { try { return sessionStorage.getItem(k); } catch (e) { return null; } }
 
   function zeige(id) {
-    ['s-login', 's-setup', 's-list', 's-ret'].forEach(function (s) { $(s).hidden = s !== id; });
-    var drin = id === 's-list' || id === 's-ret';
-    $('who').hidden = !drin; $('banner').hidden = !drin; $('liste-panel').hidden = !drin;
+    ['s-login', 's-setup', 's-list', 's-ret', 's-zw'].forEach(function (s) { $(s).hidden = s !== id; });
+    var drin = id === 's-list' || id === 's-ret' || id === 's-zw';
+    $('who').hidden = !drin; $('banner').hidden = !drin; $('tabs').hidden = !drin;
+    $('tab-ret').setAttribute('aria-selected', String(id !== 's-zw'));
+    $('tab-zw').setAttribute('aria-selected', String(id === 's-zw'));
   }
+
+  $('tab-ret').addEventListener('click', function () { if (zustand.retoure) { zeige('s-ret'); zeigeRetoure(); } else ladeListe(); });
+  $('tab-zw').addEventListener('click', function () { stoppeAbfrage(); zeige('s-zw'); ladeZwListe(); });
 
   function fehler(id, text) { $(id).textContent = text || ''; $(id).hidden = !text; }
 
@@ -279,10 +313,6 @@ td.code { font-family: var(--font-code); }
       $('u-pass').value = '';
     });
   });
-  $('gen-secret').addEventListener('click', function () {
-    $('secret-out').value = hex(crypto.getRandomValues(new Uint8Array(32)));
-    $('secret-out').hidden = false; $('secret-out').select();
-  });
 
   // ---------- Retouren ----------
   function start() {
@@ -296,21 +326,25 @@ td.code { font-family: var(--font-code); }
     zustand.retoure = null;
     zeige('s-list');
     fehler('list-error');
+    $('list-loading').hidden = false;
+    $('ret-list').innerHTML = '';
+    $('list-empty').hidden = true;
     api('retouren').then(function (d) {
-      $('banner').hidden = d.modus !== 'probelauf';
+      $('banner').hidden = String(d.modus || '').indexOf('probelauf') !== 0;
+      $('list-loading').hidden = true;
       $('list-empty').hidden = d.retouren.length > 0;
       $('ret-list').innerHTML = d.retouren.map(function (r) {
         var b = [];
+        if (r.probelaufFertig) b.push('<span class="badge ok">fertig (Probelauf)</span>');
         if (r.erledigt) b.push('<span class="badge ok">' + r.erledigt + ' erledigt</span>');
         if (r.wartet) b.push('<span class="badge warn">' + r.wartet + ' wartet</span>');
         if (r.fehler) b.push('<span class="badge err">' + r.fehler + ' Fehler</span>');
-        b.push('<span class="badge">' + r.anzahl + (r.anzahl === 1 ? ' Artikel' : ' Artikel') + '</span>');
+        b.push('<span class="badge">' + r.anzahl + ' Artikel</span>');
         return '<button type="button" class="ret" data-nr="' + esc(r.id) + '"><span><span class="nr">' + esc(r.id) + '</span><br><span class="meta">' +
-          esc(datum(r.datum)) + ' · ' + esc(r.kunde) + '</span></span><span class="badges">' + b.join('') + '</span></button>';
+          esc(datum(r.datum)) + (r.shopAuftrag ? ' · Shop ' + esc(r.shopAuftrag) : '') + '</span></span><span class="badges">' + b.join('') + '</span></button>';
       }).join('');
-      ladeZwListe();
       setTimeout(function () { $('search-input').focus(); }, 0);
-    }).catch(function (err) { fehler('list-error', err.message); });
+    }).catch(function (err) { $('list-loading').hidden = true; fehler('list-error', err.message); });
   }
   $('ret-list').addEventListener('click', function (e) {
     var b = e.target.closest('.ret'); if (b) oeffneRetoure(b.dataset.nr);
@@ -339,7 +373,11 @@ td.code { font-family: var(--font-code); }
   function zeigeRetoure() {
     var r = zustand.retoure;
     $('ret-title').textContent = 'Retoure ' + r.id;
-    $('ret-meta').textContent = datum(r.datum) + ' · ' + r.kunde + ' · Auftrag ' + r.auftragId + ' · Status ' + r.status;
+    $('ret-meta').textContent = [datum(r.datum), r.shopAuftrag ? 'Shop-Auftrag ' + r.shopAuftrag : '', 'Status ' + r.status,
+      r.probelaufFertig ? 'alle Positionen entschieden (Probelauf)' : ''].filter(Boolean).join(' · ');
+    var notes = r.plentyKommentare || [];
+    $('plenty-notes').hidden = !notes.length;
+    $('plenty-notes').innerHTML = notes.map(function (k) { return '<li>' + esc(k.text) + (k.zeit ? ' <small>' + esc(datum(k.zeit)) + '</small>' : '') + '</li>'; }).join('');
     $('pos-list').innerHTML = r.positionen.map(positionHtml).join('');
     $('ret-comments-wrap').hidden = !r.kommentare.length;
     $('ret-comments').innerHTML = r.kommentare.map(function (k) { return '<li>' + esc(k.text) + '</li>'; }).join('');
@@ -349,8 +387,8 @@ td.code { font-family: var(--font-code); }
 
   function positionHtml(p) {
     var kopf = '<div class="pos-head"><div class="thumb">' + (p.bild ? '<img src="' + esc(p.bild) + '" alt="">' : 'Kein Bild') + '</div><div><h3>' + esc(p.name) + '</h3>' +
-      '<div class="meta"><span>EAN <b>' + esc(p.ean || '–') + '</b></span><span>Variante <b>' + esc(p.varianteId) + '</b></span></div>' +
-      (p.lagerKommentar ? '<div class="meta">„' + esc(p.lagerKommentar) + '“</div>' : '') + '</div></div>';
+      '<div class="meta"><span>EAN <b>' + esc(p.ean || '–') + '</b></span><span>Variante <b>' + esc(p.varianteId) + '</b></span>' +
+      (p.modell ? '<span>Modell <b>' + esc(p.modell) + '</b></span>' : '') + (p.menge > 1 ? '<span>Menge <b>' + esc(p.menge) + '</b></span>' : '') + '</div></div></div>';
     var unten = '';
     if (offen(p)) {
       var wahl = zustand.auswahl[p.positionId];
@@ -371,7 +409,7 @@ td.code { font-family: var(--font-code); }
     if (v.fehler) return '<div class="preview err">' + esc(v.fehler) + '</div>';
     if (!v.artikel) return '<div class="preview"><span class="info">Kein Artikel. Kommentar in der Retoure: „' + esc(v.kommentar) + '“</span></div>';
     return '<div class="preview"><div class="row"><span class="price">' + eur.format(v.preis) + '</span><span class="strike">' + eur.format(v.streichpreis) + '</span>' +
-      '<span>' + (v.neu ? 'Neuer ZW-Artikel' : 'Bestand +1 auf <b>' + esc(v.bestehendeVarianteId) + '</b>') + '</span></div>' +
+      '<span>' + (v.neu ? 'Neuer ZW-Artikel' : 'Bestand +1 auf <b>' + esc(v.bestehendeVarianteId) + '</b>' + (v.bestehendSimuliert ? ' (Probelauf)' : '')) + '</span></div>' +
       '<span class="info">Barcode ' + esc(v.barcode) + ' · ' + (v.fall === 'normal' ? 'Mindestpreis − ' + v.abschlag + ' %' : (v.fall === 'a' ? 'Mindestpreis erreicht' : 'Mindestpreis leer') + ', jetziger Preis − ' + v.abschlag + ' %') + '</span>' +
       v.warnungen.map(function (w) { return '<span class="warn">' + esc(w) + '</span>'; }).join('') +
       v.hinweise.map(function (w) { return '<span class="info">' + esc(w) + '</span>'; }).join('') + '</div>';
@@ -431,14 +469,13 @@ td.code { font-family: var(--font-code); }
         });
       });
       zeigeRetoure();
-      setTimeout(ladeZwListe, 2000);
     }).catch(function (err) { fehler('ret-error', err.message); aktualisiereAnlegen(); });
   });
 
   function neuLaden() {
     if (!zustand.retoure) return Promise.resolve();
     return api('retoure', { query: { nr: zustand.retoure.id } }).then(function (d) {
-      zustand.retoure = d.retoure; zeigeRetoure(); ladeZwListe();
+      if (!$('s-ret').hidden) { zustand.retoure = d.retoure; zeigeRetoure(); }
     });
   }
   function starteAbfrage() { if (!zustand.abfrage) zustand.abfrage = setInterval(function () { neuLaden().catch(function () {}); }, ABFRAGE_SEKUNDEN * 1000); }
@@ -446,19 +483,76 @@ td.code { font-family: var(--font-code); }
 
   // ---------- ZW-Liste und Protokoll ----------
   function ladeZwListe() {
+    fehler('zw-error');
     api('zw-liste').then(function (d) {
-      $('zw-liste').innerHTML = d.zwListe.map(function (z) {
-        return '<tr><td>' + esc(datum(z.datum)) + '</td><td class="code">' + esc(z.retoureId) + '</td><td class="code">' + esc(z.zwVarianteId) + '</td><td class="code">' + esc(z.barcode) +
-          '</td><td>' + esc(z.name) + '</td><td>' + esc(z.zustand) + '</td><td>' + eur.format(z.preis) + '</td><td>' + eur.format(z.streichpreis) + '</td><td>' + esc(z.neuOderPlus1) + '</td></tr>';
-      }).join('') || '<tr><td colspan="9">Noch keine Einträge.</td></tr>';
+      zustand.zwListe = d.zwListe;
+      zeigeZwListe();
       $('protokoll').innerHTML = d.protokoll.map(function (p) {
         return '<tr><td>' + esc(new Date(p.zeit).toLocaleString('de-DE')) + '</td><td>' + esc(p.benutzer) + '</td><td>' + esc(p.aktion) + '</td><td class="code">' + esc(p.retoureId || '') +
           '</td><td class="code">' + esc(p.positionId || '') + '</td><td>' + esc(p.zustand || '') + '</td><td>' + esc(p.ergebnis || '') + (p.meldung ? ': ' + esc(p.meldung) : '') + '</td></tr>';
       }).join('');
-    }).catch(function () {});
+    }).catch(function (err) { fehler('zw-error', err.message); });
   }
+
+  function gefiltert() {
+    var f = $('zw-filter').value;
+    var such = $('zw-suche').value.trim().toLowerCase();
+    return zustand.zwListe.filter(function (z) {
+      if (f === 'offen' && z.bestandGebucht) return false;
+      if (f === 'gebucht' && !z.bestandGebucht) return false;
+      if (!such) return true;
+      return [z.retoureId, z.zwVarianteId, z.originalVarianteId, z.barcode, z.name, z.zustand].join(' ').toLowerCase().indexOf(such) >= 0;
+    });
+  }
+
+  function zeigeZwListe() {
+    var liste = gefiltert();
+    $('zw-liste').innerHTML = liste.map(function (z) {
+      var bestand = z.bestandGebucht
+        ? '<span class="gebucht">✓ gebucht</span> <small>' + esc(z.gebuchtVon || '') + ' ' + esc(datum(z.gebuchtAm)) + '</small> <button type="button" class="linkbtn" data-id="' + esc(z.id) + '" data-g="0">zurücknehmen</button>'
+        : '<button type="button" class="btn small" data-id="' + esc(z.id) + '" data-g="1">Bestand gebucht</button>';
+      return '<tr><td>' + esc(datum(z.datum)) + '</td><td class="code">' + esc(z.retoureId) + '</td><td class="code">' + esc(z.zwVarianteId) + '</td><td class="code">' + esc(z.barcode) +
+        '</td><td>' + esc(z.name) + '</td><td>' + esc(z.zustand) + '</td><td>' + eur.format(z.preis) + '</td><td>' + eur.format(z.streichpreis) + '</td><td>' + esc(z.neuOderPlus1) + '</td><td>' + bestand + '</td></tr>';
+    }).join('') || '<tr><td colspan="10">' + (zustand.zwListe.length ? 'Keine Einträge für diesen Filter.' : 'Noch keine Einträge.') + '</td></tr>';
+  }
+  $('zw-suche').addEventListener('input', zeigeZwListe);
+  $('zw-filter').addEventListener('change', zeigeZwListe);
+
+  $('zw-liste').addEventListener('click', function (e) {
+    var b = e.target.closest('button[data-id]'); if (!b) return;
+    b.disabled = true;
+    fehler('zw-error');
+    api('zw-liste-buchen', { body: { id: b.dataset.id, gebucht: b.dataset.g === '1' } }).then(function (d) {
+      // Ergebnis direkt übernehmen (n8n speichert den Stand erst nach der Antwort)
+      zustand.zwListe = zustand.zwListe.map(function (z) { return z.id === d.zeile.id ? d.zeile : z; });
+      zeigeZwListe();
+    }).catch(function (err) { b.disabled = false; fehler('zw-error', err.message); });
+  });
+
+  $('zw-csv').addEventListener('click', function () {
+    var spalten = [['datum', 'Datum'], ['retoureId', 'Retoure'], ['originalVarianteId', 'Original-Variante'], ['zwVarianteId', 'ZW-Variante'], ['barcode', 'Barcode'],
+      ['name', 'Name'], ['zustand', 'Zustand'], ['preis', 'Preis'], ['streichpreis', 'Streichpreis'], ['neuOderPlus1', 'neu/+1'], ['freigegebenVon', 'Freigegeben von'],
+      ['bestandGebucht', 'Bestand gebucht'], ['gebuchtVon', 'Gebucht von'], ['gebuchtAm', 'Gebucht am']];
+    function zelle(v) {
+      if (typeof v === 'number') v = String(v).replace('.', ',');
+      if (v === true) v = 'ja'; if (v === false) v = 'nein';
+      v = String(v == null ? '' : v);
+      if (/^[=+\-@]/.test(v)) v = "'" + v; // keine Formeln in Excel
+      return /[";\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
+    }
+    var zeilen = [spalten.map(function (s) { return s[1]; }).join(';')].concat(gefiltert().map(function (z) {
+      return spalten.map(function (s) { return zelle(z[s[0]]); }).join(';');
+    }));
+    var blob = new Blob(['\ufeff' + zeilen.join('\r\n')], { type: 'text/csv;charset=utf-8' });
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'zw-liste-' + new Date().toISOString().slice(0, 10) + '.csv';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
+  });
+
   $('reset').addEventListener('click', function () {
-    if (!confirm('Probelauf wirklich zurücksetzen? Protokoll und ZW-Liste werden geleert.')) return;
+    if (!confirm('Probelauf wirklich zurücksetzen? Entscheidungen, Protokoll und ZW-Liste werden geleert.')) return;
     api('zuruecksetzen', { body: {} }).then(function () { setTimeout(ladeListe, 1500); }).catch(function (err) { alert(err.message); });
   });
 

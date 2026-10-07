@@ -1,19 +1,98 @@
-// Ablauf der ZW-Station im Probelauf: verteilt jede Anfrage an die passende Aktion.
-// plenty und Shopware werden hier noch mit Beispieldaten nachgestellt („sim“).
-// Der Zustand (Protokoll, offene Freigaben, ZW-Liste) liegt im Speicher des Workflows.
+// Ablauf der ZW-Station: verteilt jede Anfrage an die passende Aktion.
+// Stand Phase 5: Retouren, Artikel und Preise kommen echt aus plenty und Shopware (nur lesend).
+// Anlegen wird nur nachgestellt: nichts wird in plenty oder Shopware geschrieben („Probelauf“).
+// Der Zustand (Protokoll, offene Freigaben, ZW-Liste, Zwischenspeicher) liegt im Speicher des Workflows.
 // Beim Bauen des n8n-Workflows wird alles zwischen NUR-NODE-ANFANG und NUR-NODE-ENDE entfernt.
+//
+// Ablauf in n8n pro Anfrage:
+//   Webhook → Einstellungen → Vorbereiten (zwVorbereiten) → [plenty Runde A → Runde B planen (zwRundeB)
+//   → plenty Runde B → Shopware] → ZW-Logik (zwVerarbeiten) → Antwort
+// Die eckigen Klammern laufen nur, wenn Daten gebraucht werden.
 
 // NUR-NODE-ANFANG
 const {
   istZwZustand, istGueltigeEntscheidung, berechneZwPreis, zwBarcode, zwVariantennummer, zwName, zwKommentar, euro,
 } = require('./zw-logik.js');
 const { passwortPruefen, signatur, schluesselAusstellen, schluesselPruefen, gleich, sha256, utf8, bytesZuHex } = require('./anmeldung.js');
+const {
+  LEER_PLENTY, LEER_SHOPWARE, retourenNummer, anfrageRetourenListe, anfrageRetoure, anfrageVarianten, anfrageBarcode, shopwareSuche,
+  plentyFehler, eintraege, artikelPositionen, shopAuftrag, eanAusVariante, textOhneHtml, shopwareNachNummer,
+} = require('./quellen.js');
 // NUR-NODE-ENDE
 
 const ERLEDIGT = ['angelegt', 'plus1', 'nicht_verkaufbar', 'kein_zw'];
 const MAX_FEHLVERSUCHE = 5;
 const SPERRE_MINUTEN = 15;
+const MAX_ZWISCHENSPEICHER_RETOUREN = 300;
+const DATEN_AKTIONEN = ['retouren', 'retoure', 'vorschau', 'anlegen'];
 
+// ---------- Einstieg ----------
+
+// Welche Aktion? Aus der Webhook-Adresse. Ohne Adresse und ohne Kopfzeilen (Testlauf direkt in n8n,
+// nicht von außen erreichbar) aus body.aktion oder query.aktion.
+function zwRoute(anfrage) {
+  const url = String(anfrage.url || '');
+  const ueberWebhook = !!(anfrage.headers && (anfrage.headers.host || anfrage.headers.Host));
+  if (!url && !ueberWebhook) {
+    const a = (anfrage.body && anfrage.body.aktion) || (anfrage.query && anfrage.query.aktion) || '';
+    return { aktion: String(a), testlauf: true };
+  }
+  const pfad = url.split('?')[0].replace(/\/+$/, '');
+  return { aktion: pfad.slice(pfad.lastIndexOf('/') + 1), testlauf: false };
+}
+
+// Schritt 1 in n8n: Welche Daten braucht diese Anfrage? Liefert die Abfragen für plenty Runde A und Shopware.
+function zwVorbereiten(anfrage, k) {
+  try {
+    const speicher = k.speicher;
+    speicherVorbereiten(speicher);
+    const e = k.einstellungen || {};
+    const route = zwRoute(anfrage);
+    if (!DATEN_AKTIONEN.includes(route.aktion)) return { weiter: 'logik' };
+    if (!route.testlauf) {
+      // Ohne gültige Anmeldung keine Abfragen an plenty und Shopware. Die Ablehnung schreibt die ZW-Logik.
+      const g = String(e.geheimSchluessel || '').trim().length >= 32 ? String(e.geheimSchluessel).trim() : speicher.geheimnis;
+      const kopf = String((anfrage.headers || {}).authorization || '');
+      if (!g || !schluesselPruefen(g, kopf.replace(/^Bearer\s+/i, ''), k.jetzt)) return { weiter: 'logik' };
+    }
+    const q = anfrage.query || {};
+    const body = anfrage.body || {};
+
+    if (route.aktion === 'retouren') {
+      return { weiter: 'daten', plan: { art: 'retouren' }, plenty: anfrageRetourenListe(e), shopware: LEER_SHOPWARE };
+    }
+    if (route.aktion === 'retoure') {
+      const id = retourenNummer(q.nr);
+      if (!id) return { weiter: 'logik' };
+      return { weiter: 'daten', plan: { art: 'retoure', id }, plenty: anfrageRetoure(id), shopware: LEER_SHOPWARE };
+    }
+    // vorschau und anlegen: Barcodes der möglichen ZW-Artikel in plenty suchen, Originale in Shopware lesen
+    const entscheidungen = Array.isArray(body.entscheidungen) ? body.entscheidungen.slice(0, 50) : [];
+    const barcodes = [];
+    const varianten = [];
+    for (const x of entscheidungen) {
+      const pos = speicher.cache.positionen[String(x.positionId || '')];
+      if (!pos || !pos.ean || !istZwZustand(String(x.zustand || ''))) continue;
+      for (const code of [zwBarcode(pos.ean, x.zustand), pos.ean + 'ZW']) if (!barcodes.includes(code)) barcodes.push(code);
+      varianten.push(pos.varianteId);
+    }
+    if (!barcodes.length) return { weiter: 'logik' };
+    return { weiter: 'daten', plan: { art: route.aktion, barcodes }, plenty: barcodes.map(anfrageBarcode), shopware: shopwareSuche(varianten) };
+  } catch (err) {
+    return { weiter: 'logik' };
+  }
+}
+
+// Schritt 2 in n8n: Abfragen für plenty Runde B, abhängig von den Ergebnissen aus Runde A.
+function zwRundeB(plan, antwortenA) {
+  if (plan && plan.art === 'retoure' && !plentyFehler(antwortenA) && antwortenA[0]) {
+    const ids = [...new Set(artikelPositionen(antwortenA[0]).map((p) => p.varianteId))];
+    if (ids.length) return [anfrageVarianten(ids)];
+  }
+  return [LEER_PLENTY];
+}
+
+// Schritt 3 in n8n: die eigentliche Aktion. k.daten = { plan, a, b, shopware } wenn Daten geholt wurden.
 function zwVerarbeiten(anfrage, k) {
   try {
     return zwAktion(anfrage, k);
@@ -25,10 +104,10 @@ function zwVerarbeiten(anfrage, k) {
 
 function zwAktion(anfrage, k) {
   const speicher = k.speicher;
-  speicherVorbereiten(speicher, k.beispieldaten);
+  speicherVorbereiten(speicher);
   const e = Object.assign({}, k.einstellungen || {}, { geheimSchluessel: geheimSchluesselBestimmen(k.einstellungen || {}, speicher, k.zufall) });
-  const pfad = String(anfrage.url || '').split('?')[0].replace(/\/+$/, '');
-  const aktion = pfad.slice(pfad.lastIndexOf('/') + 1);
+  const route = zwRoute(anfrage);
+  const aktion = route.aktion;
   const q = anfrage.query || {};
   const body = anfrage.body || {};
 
@@ -40,35 +119,36 @@ function zwAktion(anfrage, k) {
         return json(200, { ok: true, codeSha256: quelle ? bytesZuHex(sha256(utf8(quelle))) : null });
       }
       return { status: 200, contentType: 'text/html; charset=utf-8', body: k.seiteHtml };
-
     case 'anmelden':
       return anmelden(body, e, speicher, k.jetzt);
-
     case 'freigabe':
       return freigabeSeite(q, e, speicher);
-
     case 'freigabe-entscheiden':
       return freigabeEntscheiden(body, e, speicher, k.jetzt);
-
   }
 
-  // Alle weiteren Aktionen nur mit gültigem Schlüssel
-  const person = angemeldetePerson(anfrage.headers || {}, e, k.jetzt);
+  // Alle weiteren Aktionen nur mit gültigem Schlüssel. Testläufe direkt in n8n (ohne Webhook-Adresse) gelten als Admin.
+  const person = route.testlauf
+    ? { benutzer: 'test', name: 'Testlauf in n8n', rolle: 'admin' }
+    : angemeldetePerson(anfrage.headers || {}, e, k.jetzt);
   switch (aktion) {
     case 'retouren':
-      return json(200, { ok: true, person, modus: 'probelauf', retouren: retourenListe(speicher, e) });
+      return json(200, { ok: true, person, modus: 'probelauf-echtdaten', retouren: retourenListe(speicher, daten(k, 'retouren')) });
     case 'retoure':
-      return json(200, { ok: true, retoure: retoureDetail(speicher, q.nr) });
+      if (!retourenNummer(q.nr)) return json(404, { ok: false, fehler: 'Retoure „' + String(q.nr || '').slice(0, 40) + '“ nicht gefunden.' });
+      return json(200, { ok: true, retoure: retoureDetail(speicher, q.nr, daten(k, 'retoure'), k.jetzt) });
     case 'vorschau':
-      return json(200, { ok: true, vorschau: vorschauListe(speicher, body, e) });
+      return json(200, { ok: true, vorschau: vorschauListe(speicher, body, e, quellenFuerVorschau(k)) });
     case 'anlegen':
-      return anlegen(speicher, body, e, person, k.jetzt, anfrage.url);
+      return anlegen(speicher, body, e, person, k.jetzt, anfrage.url, quellenFuerVorschau(k));
     case 'zw-liste':
-      return json(200, { ok: true, zwListe: speicher.zwListe.slice(-100).reverse(), protokoll: speicher.protokoll.slice(-50).reverse() });
+      return json(200, { ok: true, zwListe: speicher.zwListe.slice(-300).reverse(), protokoll: speicher.protokoll.slice(-50).reverse() });
+    case 'zw-liste-buchen':
+      return zwListeBuchen(speicher, body, person, k.jetzt);
     case 'zuruecksetzen':
       if (person.rolle !== 'admin') return json(403, { ok: false, fehler: 'Nur für Admins.' });
       for (const s of Object.keys(speicher)) if (s !== 'fehlversuche' && s !== 'geheimnis') delete speicher[s];
-      speicherVorbereiten(speicher, k.beispieldaten);
+      speicherVorbereiten(speicher);
       return json(200, { ok: true });
   }
   return json(404, { ok: false, fehler: 'Unbekannte Aktion: ' + aktion });
@@ -76,8 +156,8 @@ function zwAktion(anfrage, k) {
 
 // ---------- Hilfen ----------
 
-function json(status, daten) {
-  return { status, contentType: 'application/json; charset=utf-8', body: JSON.stringify(daten) };
+function json(status, inhalt) {
+  return { status, contentType: 'application/json; charset=utf-8', body: JSON.stringify(inhalt) };
 }
 
 function abbrechen(status, fehler) {
@@ -107,26 +187,15 @@ function esc(s) {
   return String(s === null || s === undefined ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
-function kopie(x) {
-  return JSON.parse(JSON.stringify(x));
-}
-
-function speicherVorbereiten(speicher, beispieldaten) {
-  if (!speicher.sim) {
-    const b = kopie(beispieldaten);
-    speicher.sim = {
-      originale: b.originale,
-      retouren: b.retouren.map((r) => Object.assign(r, { kommentare: [] })),
-      zwArtikel: b.zwArtikel,
-      alteZwArtikel: b.alteZwArtikel,
-      naechsteVarianteId: b.naechsteVarianteId,
-      naechsteArtikelId: b.naechsteArtikelId || 9729001,
-    };
-  }
+function speicherVorbereiten(speicher) {
   if (!speicher.positionen) speicher.positionen = {};
   if (!speicher.protokoll) speicher.protokoll = [];
   if (!speicher.zwListe) speicher.zwListe = [];
   if (!speicher.fehlversuche) speicher.fehlversuche = {};
+  if (!speicher.cache) speicher.cache = { positionen: {}, retouren: {}, reihenfolge: [] };
+  if (!speicher.kommentare) speicher.kommentare = {};
+  if (!speicher.retourenFertig) speicher.retourenFertig = {};
+  if (!speicher.sim) speicher.sim = { naechsteNr: 1, zwArtikel: {}, naechsteZeile: 1 };
 }
 
 // Geheimschlüssel: aus „Einstellungen“, falls dort gesetzt. Sonst einmalig zufällig erzeugen
@@ -187,6 +256,22 @@ function protokollieren(speicher, jetzt, eintrag) {
   if (speicher.protokoll.length > 1000) speicher.protokoll.splice(0, speicher.protokoll.length - 1000);
 }
 
+// Die von n8n geholten Daten für diese Aktion. Fehlen sie, lief „Vorbereiten“ nicht wie erwartet.
+function daten(k, art) {
+  const d = k.daten;
+  if (!d || !d.plan || d.plan.art !== art) abbrechen(502, 'Keine Daten aus plenty erhalten. Bitte erneut versuchen.');
+  const fehler = plentyFehler(d.a) || plentyFehler(d.b);
+  if (fehler && art === 'retoure' && /\b404\b|not found/i.test(fehler)) abbrechen(404, 'Retoure „' + d.plan.id + '“ nicht gefunden.');
+  if (fehler) abbrechen(502, 'plenty meldet: ' + fehler);
+  if (d.shopware && d.shopware.error) abbrechen(502, 'Shopware meldet: ' + (d.shopware.error.message || d.shopware.error));
+  return d;
+}
+
+function kommentarSim(speicher, retoureId, zeit, text) {
+  if (!speicher.kommentare[retoureId]) speicher.kommentare[retoureId] = [];
+  speicher.kommentare[retoureId].push({ zeit, text });
+}
+
 // ---------- Anmeldung ----------
 
 function anmelden(body, e, speicher, jetzt) {
@@ -223,105 +308,131 @@ function anmelden(body, e, speicher, jetzt) {
 function angemeldetePerson(headers, e, jetzt) {
   const kopf = String(headers.authorization || headers.Authorization || '');
   const schluessel = kopf.replace(/^Bearer\s+/i, '');
-  const daten = schluesselPruefen(geheimnis(e), schluessel, jetzt);
-  if (!daten) abbrechen(401, 'Bitte neu anmelden.');
+  const inhalt = schluesselPruefen(geheimnis(e), schluessel, jetzt);
+  if (!inhalt) abbrechen(401, 'Bitte neu anmelden.');
   // Gesperrte oder entfernte Personen verlieren den Zugriff sofort
-  const person = benutzerListe(e).find((b) => String(b.benutzer || '').toLowerCase() === daten.benutzer);
+  const person = benutzerListe(e).find((b) => String(b.benutzer || '').toLowerCase() === inhalt.benutzer);
   if (!person || person.gesperrt) abbrechen(401, 'Zugang gesperrt. Bitte an Tobias wenden.');
-  return { benutzer: daten.benutzer, name: person.name || daten.benutzer, rolle: person.rolle || 'lager' };
+  return { benutzer: inhalt.benutzer, name: person.name || inhalt.benutzer, rolle: person.rolle || 'lager' };
 }
 
-// ---------- Retouren ----------
+// ---------- Retouren (echt aus plenty) ----------
 
 function positionsStatus(speicher, positionId) {
   return speicher.positionen[positionId] || { status: 'offen' };
 }
 
-function retourenListe(speicher, e) {
-  const offen = String(e.statusOffen || '9.1.1');
-  return speicher.sim.retouren
-    .filter((r) => r.status === offen)
-    .map((r) => {
-      const st = r.positionen.map((p) => positionsStatus(speicher, p.positionId).status);
-      return {
-        id: r.id, datum: r.datum, kunde: r.kunde, anzahl: r.positionen.length,
-        erledigt: st.filter((s) => ERLEDIGT.includes(s)).length,
-        wartet: st.filter((s) => s === 'wartet').length,
-        fehler: st.filter((s) => s === 'fehler').length,
-      };
-    });
-}
-
-function retoureFinden(speicher, nr) {
-  const id = String(nr || '').trim().replace(/^R-?/i, '');
-  const r = speicher.sim.retouren.find((x) => x.id === id);
-  if (!r) abbrechen(404, 'Retoure „' + (nr || '') + '“ nicht gefunden.');
-  return r;
-}
-
-function retoureDetail(speicher, nr) {
-  const r = retoureFinden(speicher, nr);
+function zaehlen(speicher, positionIds) {
+  const st = positionIds.map((id) => positionsStatus(speicher, id).status);
   return {
-    id: r.id, auftragId: r.auftragId, datum: r.datum, kunde: r.kunde, status: r.status,
-    kommentare: r.kommentare,
-    positionen: r.positionen.map((p) => {
-      const o = speicher.sim.originale[p.varianteId] || {};
-      return Object.assign({
-        positionId: p.positionId, varianteId: p.varianteId, ean: o.ean, modell: o.modell,
-        name: o.namePlenty || ('Variante ' + p.varianteId), lagerKommentar: p.lagerKommentar, bild: null,
-      }, positionsStatus(speicher, p.positionId));
-    }),
+    erledigt: st.filter((s) => ERLEDIGT.includes(s)).length,
+    wartet: st.filter((s) => s === 'wartet').length,
+    fehler: st.filter((s) => s === 'fehler').length,
   };
 }
 
-function positionFinden(speicher, positionId) {
-  for (const r of speicher.sim.retouren) {
-    const p = r.positionen.find((x) => x.positionId === positionId);
-    if (p) return { retoure: r, position: p };
+function retourenListe(speicher, d) {
+  return eintraege(d.a[0]).map((auftrag) => {
+    const positionen = artikelPositionen(auftrag);
+    const id = String(auftrag.id);
+    return Object.assign({
+      id, datum: String(auftrag.createdAt || '').slice(0, 10), shopAuftrag: shopAuftrag(auftrag), anzahl: positionen.length,
+      probelaufFertig: !!speicher.retourenFertig[id],
+    }, zaehlen(speicher, positionen.map((p) => p.positionId)));
+  });
+}
+
+function retoureMerken(speicher, id, eintrag) {
+  const c = speicher.cache;
+  if (!c.retouren[id]) c.reihenfolge.push(id);
+  c.retouren[id] = eintrag;
+  while (c.reihenfolge.length > MAX_ZWISCHENSPEICHER_RETOUREN) {
+    const alt = c.reihenfolge.shift();
+    for (const p of (c.retouren[alt] || {}).positionIds || []) delete c.positionen[p];
+    delete c.retouren[alt];
   }
-  return null;
+}
+
+function retoureDetail(speicher, nr, d, jetzt) {
+  const auftrag = d.a[0] || {};
+  const id = String(auftrag.id || '');
+  if (!id || Number(auftrag.typeId) !== 3) abbrechen(404, 'Retoure „' + (nr || '') + '“ nicht gefunden.');
+  const varianten = {};
+  for (const v of eintraege(d.b && d.b[0])) varianten[String(v.id)] = v;
+  const positionen = artikelPositionen(auftrag).map((p) => {
+    const v = varianten[p.varianteId] || {};
+    const pos = Object.assign({}, p, { retoureId: id, ean: eanAusVariante(v), modell: v.model || '', variantennummer: v.number || '' });
+    speicher.cache.positionen[p.positionId] = pos;
+    return pos;
+  });
+  retoureMerken(speicher, id, { positionIds: positionen.map((p) => p.positionId), shopAuftrag: shopAuftrag(auftrag), datum: String(auftrag.createdAt || '').slice(0, 10), gemerkt: new Date(jetzt).toISOString() });
+  return {
+    id, shopAuftrag: shopAuftrag(auftrag), datum: String(auftrag.createdAt || '').slice(0, 10), status: auftrag.statusName || String(auftrag.statusId),
+    probelaufFertig: !!speicher.retourenFertig[id],
+    plentyKommentare: eintraege(d.a[1]).map((c) => ({ zeit: c.createdAt, text: textOhneHtml(c.text) })).filter((c) => c.text),
+    kommentare: speicher.kommentare[id] || [],
+    positionen: positionen.map((p) => Object.assign({
+      positionId: p.positionId, varianteId: p.varianteId, ean: p.ean, modell: p.modell, name: p.name, menge: p.menge, bild: null,
+    }, positionsStatus(speicher, p.positionId))),
+  };
 }
 
 // ---------- Vorschau ----------
 
-function vorschauPosition(speicher, positionId, zustand, e) {
-  const fund = positionFinden(speicher, positionId);
-  if (!fund) return { positionId, zustand, fehler: 'Position nicht gefunden.' };
+function quellenFuerVorschau(k) {
+  const d = k.daten;
+  if (!d || !d.plan || (d.plan.art !== 'vorschau' && d.plan.art !== 'anlegen')) return { barcodes: {}, shopware: {}, geholt: false };
+  const fehler = plentyFehler(d.a);
+  if (fehler) abbrechen(502, 'plenty meldet: ' + fehler);
+  if (d.shopware && d.shopware.error) abbrechen(502, 'Shopware meldet: ' + (d.shopware.error.message || d.shopware.error));
+  const barcodes = {};
+  (d.plan.barcodes || []).forEach((code, i) => { barcodes[code] = eintraege(d.a[i]); });
+  return { barcodes, shopware: shopwareNachNummer(d.shopware), geholt: true };
+}
+
+function vorschauPosition(speicher, positionId, zustand, e, quellen) {
+  const pos = speicher.cache.positionen[positionId];
+  if (!pos) return { positionId, zustand, fehler: 'Position unbekannt. Bitte die Retoure neu öffnen.' };
   if (!istGueltigeEntscheidung(zustand)) return { positionId, zustand, fehler: 'Unbekannter Zustand.' };
-  const basis = { positionId, retoureId: fund.retoure.id, zustand };
+  const basis = { positionId, retoureId: pos.retoureId, zustand };
   if (!istZwZustand(zustand)) {
     return Object.assign(basis, { artikel: false, kommentar: zwKommentar({ zustand }) });
   }
-  const o = speicher.sim.originale[fund.position.varianteId];
-  if (!o) return Object.assign(basis, { fehler: 'Original ' + fund.position.varianteId + ' nicht in plenty gefunden.' });
-  if (!o.shopware) return Object.assign(basis, { fehler: 'Original ' + o.varianteId + ' nicht in Shopware gefunden. Bitte ans Büro geben.' });
+  if (!pos.ean) return Object.assign(basis, { fehler: 'Variante ' + pos.varianteId + ' hat in plenty keine EAN. Bitte ans Büro geben.' });
+  if (!quellen.geholt) return Object.assign(basis, { fehler: 'Daten aus plenty und Shopware fehlen. Bitte erneut versuchen.' });
+  const sw = quellen.shopware[pos.varianteId];
+  if (!sw) return Object.assign(basis, { fehler: 'Original ' + pos.varianteId + ' nicht in Shopware gefunden. Bitte ans Büro geben.' });
 
   let barcode, preis;
   try {
-    barcode = zwBarcode(o.ean, zustand);
-    preis = berechneZwPreis({
-      jetzigerPreis: o.shopware.preis, mindestpreis: o.shopware.mindestpreis, zustand, einkaufspreis: o.shopware.einkaufspreis,
-    }, e);
+    barcode = zwBarcode(pos.ean, zustand);
+    preis = berechneZwPreis({ jetzigerPreis: sw.preis, mindestpreis: sw.mindestpreis, zustand, einkaufspreis: sw.einkaufspreis }, e);
   } catch (err) {
     return Object.assign(basis, { fehler: err.message });
   }
-  const vorhanden = speicher.sim.zwArtikel[barcode];
+  // Gibt es den ZW-Artikel schon? Echt in plenty (Barcode) oder im Probelauf nachgestellt.
+  const echt = (quellen.barcodes[barcode] || [])[0];
+  const sim = speicher.sim.zwArtikel[barcode];
+  const vorhanden = echt ? { varianteId: String(echt.id), simuliert: false } : (sim ? { varianteId: sim.varianteId, simuliert: true } : null);
   const hinweise = [];
-  const alt = speicher.sim.alteZwArtikel && speicher.sim.alteZwArtikel[o.ean + 'ZW'];
-  if (alt) hinweise.push('Alter ZW-Artikel ' + alt.varianteId + ' (Barcode ' + o.ean + 'ZW) wird ignoriert.');
+  const alt = (quellen.barcodes[pos.ean + 'ZW'] || [])[0];
+  if (alt) hinweise.push('Alter ZW-Artikel ' + alt.id + ' (Barcode ' + pos.ean + 'ZW) wird ignoriert.');
   return Object.assign(basis, {
     artikel: true,
-    originalVarianteId: o.varianteId,
+    originalVarianteId: pos.varianteId,
+    ean: pos.ean,
     barcode,
-    name: zwName(o.shopware.name),
-    variantennummer: zwVariantennummer(o.modell),
+    name: zwName(sw.name),
+    variantennummer: zwVariantennummer(pos.modell || sw.name),
     preis: preis.preis,
     streichpreis: preis.streichpreis,
+    mindestpreis: sw.mindestpreis,
     fall: preis.fall,
     abschlag: preis.abschlag,
     neu: !vorhanden,
     bestehendeVarianteId: vorhanden ? vorhanden.varianteId : null,
-    warnungen: preis.warnungen,
+    bestehendSimuliert: vorhanden ? vorhanden.simuliert : false,
+    warnungen: preis.warnungen.concat(pos.modell ? [] : ['Modell fehlt in plenty. Variantennummer wird aus dem Namen gebildet.']),
     hinweise,
   });
 }
@@ -333,13 +444,13 @@ function entscheidungenLesen(body) {
   return liste.map((x) => ({ positionId: String(x.positionId || ''), zustand: String(x.zustand || '') }));
 }
 
-function vorschauListe(speicher, body, e) {
-  return entscheidungenLesen(body).map((x) => vorschauPosition(speicher, x.positionId, x.zustand, e));
+function vorschauListe(speicher, body, e, quellen) {
+  return entscheidungenLesen(body).map((x) => vorschauPosition(speicher, x.positionId, x.zustand, e, quellen));
 }
 
-// ---------- Anlegen ----------
+// ---------- Anlegen (Probelauf: nichts wird geschrieben) ----------
 
-function anlegen(speicher, body, e, person, jetzt, url) {
+function anlegen(speicher, body, e, person, jetzt, url, quellen) {
   const freigabeAn = String(e.freigabeAn || '').trim();
   if (!freigabeAn) abbrechen(500, 'Einstellungen: freigabeAn (E-Mail für die Freigabe) fehlt.');
   const g = geheimnis(e);
@@ -354,16 +465,16 @@ function anlegen(speicher, body, e, person, jetzt, url) {
       ergebnisse.push(Object.assign({ positionId: x.positionId, hinweis: 'Schon entschieden, nichts geändert.' }, bisher));
       continue;
     }
-    const v = vorschauPosition(speicher, x.positionId, x.zustand, e);
-    const fund = positionFinden(speicher, x.positionId);
-    const gemeinsam = { zustand: x.zustand, von: person.benutzer, aktualisiert: new Date(jetzt).toISOString() };
+    const v = vorschauPosition(speicher, x.positionId, x.zustand, e, quellen);
+    const pos = speicher.cache.positionen[x.positionId];
+    const gemeinsam = { zustand: x.zustand, von: person.benutzer, retoureId: pos ? pos.retoureId : null, aktualisiert: new Date(jetzt).toISOString() };
 
     if (v.fehler) {
-      if (!fund) { ergebnisse.push({ positionId: x.positionId, status: 'fehler', meldung: v.fehler }); continue; }
+      if (!pos) { ergebnisse.push({ positionId: x.positionId, status: 'fehler', meldung: v.fehler }); continue; }
       const st = Object.assign({ status: 'fehler', meldung: v.fehler, versuch: (bisher.versuch || 0) }, gemeinsam);
       speicher.positionen[x.positionId] = st;
-      fund.retoure.kommentare.push({ zeit: gemeinsam.aktualisiert, text: 'ZW-Fehler (' + x.positionId + '): ' + v.fehler });
-      protokollieren(speicher, jetzt, { benutzer: person.benutzer, aktion: 'anlegen', retoureId: fund.retoure.id, positionId: x.positionId, zustand: x.zustand, ergebnis: 'fehler', meldung: v.fehler });
+      kommentarSim(speicher, pos.retoureId, gemeinsam.aktualisiert, 'ZW-Fehler (' + x.positionId + '): ' + v.fehler);
+      protokollieren(speicher, jetzt, { benutzer: person.benutzer, aktion: 'anlegen', retoureId: pos.retoureId, positionId: x.positionId, zustand: x.zustand, ergebnis: 'fehler', meldung: v.fehler });
       ergebnisse.push(Object.assign({ positionId: x.positionId }, st));
       continue;
     }
@@ -372,9 +483,9 @@ function anlegen(speicher, body, e, person, jetzt, url) {
       const status = x.zustand === 'Kein ZW' ? 'kein_zw' : 'nicht_verkaufbar';
       const st = Object.assign({ status, meldung: v.kommentar }, gemeinsam);
       speicher.positionen[x.positionId] = st;
-      fund.retoure.kommentare.push({ zeit: gemeinsam.aktualisiert, text: v.kommentar + ' (' + x.positionId + ')' });
-      protokollieren(speicher, jetzt, { benutzer: person.benutzer, aktion: 'entscheidung', retoureId: fund.retoure.id, positionId: x.positionId, zustand: x.zustand, ergebnis: status });
-      retoureAbschliessenWennFertig(speicher, fund.retoure, jetzt, e);
+      kommentarSim(speicher, pos.retoureId, gemeinsam.aktualisiert, v.kommentar + ' (' + x.positionId + ')');
+      protokollieren(speicher, jetzt, { benutzer: person.benutzer, aktion: 'entscheidung', retoureId: pos.retoureId, positionId: x.positionId, zustand: x.zustand, ergebnis: status });
+      retoureAbschliessenWennFertig(speicher, pos.retoureId, jetzt, e);
       ergebnisse.push(Object.assign({ positionId: x.positionId }, st));
       continue;
     }
@@ -382,8 +493,8 @@ function anlegen(speicher, body, e, person, jetzt, url) {
     const versuch = (bisher.versuch || 0) + 1;
     const st = Object.assign({ status: 'wartet', versuch, vorschau: v }, gemeinsam);
     speicher.positionen[x.positionId] = st;
-    protokollieren(speicher, jetzt, { benutzer: person.benutzer, aktion: 'freigabe-angefragt', retoureId: fund.retoure.id, positionId: x.positionId, zustand: x.zustand, preis: v.preis, ergebnis: 'wartet' });
-    mails.push(freigabeMail(v, fund, person, versuch, basisUrl, g, e, freigabeAn));
+    protokollieren(speicher, jetzt, { benutzer: person.benutzer, aktion: 'freigabe-angefragt', retoureId: pos.retoureId, positionId: x.positionId, zustand: x.zustand, preis: v.preis, ergebnis: 'wartet' });
+    mails.push(freigabeMail(speicher, v, person, versuch, basisUrl, g, e, freigabeAn));
     ergebnisse.push(Object.assign({ positionId: x.positionId }, st));
   }
   const antwort = json(200, { ok: true, ergebnisse });
@@ -395,32 +506,36 @@ function freigabeSignatur(g, positionId, versuch) {
   return signatur(g, 'freigabe|' + positionId + '|' + versuch);
 }
 
-function freigabeMail(v, fund, person, versuch, basisUrl, g, e, an) {
-  const o = { positionId: v.positionId, versuch, s: freigabeSignatur(g, v.positionId, versuch) };
-  const link = basisUrl + '/freigabe?p=' + encodeURIComponent(o.positionId) + '&n=' + versuch + '&s=' + o.s;
-  const zeilen = vorschauZeilen(v, fund);
+function retoureText(speicher, retoureId) {
+  const r = speicher.cache.retouren[retoureId];
+  return String(retoureId) + (r && r.shopAuftrag ? ' · ' + r.shopAuftrag : '');
+}
+
+function freigabeMail(speicher, v, person, versuch, basisUrl, g, e, an) {
+  const link = basisUrl + '/freigabe?p=' + encodeURIComponent(v.positionId) + '&n=' + versuch + '&s=' + freigabeSignatur(g, v.positionId, versuch);
   return {
     positionId: v.positionId,
     an,
     von: String(e.absender || an),
-    betreff: 'ZW-Freigabe: ' + v.name + ' · ' + v.zustand + ' · Retoure ' + fund.retoure.id,
-    html: '<p>' + esc(person.name) + ' möchte einen ZW-Artikel anlegen (Probelauf, es wird nichts in plenty oder Shopware geändert).</p>' +
-      '<table cellpadding="6" style="border-collapse:collapse">' + zeilen + '</table>' +
+    betreff: 'ZW-Freigabe: ' + v.name + ' · ' + v.zustand + ' · Retoure ' + v.retoureId,
+    html: '<p>' + esc(person.name) + ' möchte einen ZW-Artikel anlegen. <b>Probelauf:</b> Daten sind echt, angelegt wird aber noch nichts in plenty oder Shopware.</p>' +
+      '<table cellpadding="6" style="border-collapse:collapse">' + vorschauZeilen(speicher, v) + '</table>' +
       (v.warnungen.length ? '<p style="color:#9a5a00"><b>Warnung:</b> ' + v.warnungen.map(esc).join('<br>') + '</p>' : '') +
       '<p><a href="' + esc(link) + '" style="display:inline-block;background:#1f5f8b;color:#fff;padding:12px 20px;border-radius:8px;text-decoration:none;font-weight:600">Freigeben oder ablehnen</a></p>' +
       '<p style="color:#5b6b78;font-size:13px">Der Link öffnet eine Seite mit den Knöpfen Freigeben und Ablehnen. Erst der Klick dort zählt.</p>',
   };
 }
 
-function vorschauZeilen(v, fund) {
+function vorschauZeilen(speicher, v) {
   const z = [
-    ['Retoure', fund.retoure.id + ' · ' + fund.retoure.kunde],
+    ['Retoure', retoureText(speicher, v.retoureId)],
     ['Artikel', v.name],
+    ['Original', 'Variante ' + v.originalVarianteId + ' · EAN ' + v.ean],
     ['Zustand', v.zustand],
     ['Barcode', v.barcode],
     ['Preis', euro(v.preis) + ' (Streichpreis ' + euro(v.streichpreis) + ')'],
-    ['Preisregel', v.fall === 'normal' ? 'Mindestpreis − ' + v.abschlag + ' %' : (v.fall === 'a' ? 'Mindestpreis erreicht' : 'Mindestpreis leer') + ': jetziger Preis − ' + v.abschlag + ' %'],
-    ['Ergebnis', v.neu ? 'Neuer ZW-Artikel' : 'Bestand +1 auf ' + v.bestehendeVarianteId],
+    ['Preisregel', v.fall === 'normal' ? 'Mindestpreis ' + euro(v.mindestpreis) + ' − ' + v.abschlag + ' %' : (v.fall === 'a' ? 'Mindestpreis erreicht' : 'Mindestpreis leer') + ': jetziger Preis − ' + v.abschlag + ' %'],
+    ['Ergebnis', v.neu ? 'Neuer ZW-Artikel' : 'Bestand +1 auf ' + v.bestehendeVarianteId + (v.bestehendSimuliert ? ' (Probelauf)' : '')],
   ];
   return z.map((r) => '<tr><td>' + esc(r[0]) + '</td><td><b>' + esc(r[1]) + '</b></td></tr>').join('');
 }
@@ -438,7 +553,7 @@ function freigabePruefen(werte, e, speicher) {
     const text = st && st.versuch === versuch ? 'Status: ' + statusText(st.status) : 'Dieser Link ist veraltet.';
     return { fehler: html(200, 'Schon entschieden', '<h1>Schon entschieden</h1><p>' + esc(text) + '</p>') };
   }
-  return { positionId, versuch, st, fund: positionFinden(speicher, positionId) };
+  return { positionId, versuch, st };
 }
 
 function statusText(s) {
@@ -449,8 +564,8 @@ function freigabeSeite(q, e, speicher) {
   const f = freigabePruefen(q, e, speicher);
   if (f.fehler) return f.fehler;
   const v = f.st.vorschau;
-  return html(200, 'ZW-Freigabe', '<h1>ZW-Freigabe</h1><p>Angefragt von <b>' + esc(f.st.von) + '</b>. Probelauf: Es wird nichts in plenty oder Shopware geändert.</p>' +
-    '<table>' + vorschauZeilen(v, f.fund) + '</table>' +
+  return html(200, 'ZW-Freigabe', '<h1>ZW-Freigabe</h1><p>Angefragt von <b>' + esc(f.st.von) + '</b>. Probelauf: Daten sind echt, angelegt wird noch nichts.</p>' +
+    '<table>' + vorschauZeilen(speicher, v) + '</table>' +
     v.warnungen.map((w) => '<div class="w">' + esc(w) + '</div>').join('') +
     '<form method="post" action="freigabe-entscheiden">' +
     '<input type="hidden" name="p" value="' + esc(f.positionId) + '"><input type="hidden" name="n" value="' + f.versuch + '">' +
@@ -464,83 +579,92 @@ function freigabeEntscheiden(body, e, speicher, jetzt) {
   if (f.fehler) return f.fehler;
   const zeit = new Date(jetzt).toISOString();
   const v = f.st.vorschau;
-  const retoure = f.fund.retoure;
+  const retoureId = v.retoureId;
   const von = 'Freigabe-Mail (' + String(e.freigabeAn || '') + ')';
 
   if (body.entscheidung === 'ablehnen') {
     speicher.positionen[f.positionId] = Object.assign({}, f.st, { status: 'abgelehnt', meldung: 'Abgelehnt, nichts angelegt', aktualisiert: zeit });
-    retoure.kommentare.push({ zeit, text: 'ZW abgelehnt: ' + v.zustand + ' (' + f.positionId + '), nichts angelegt' });
-    protokollieren(speicher, jetzt, { benutzer: von, aktion: 'freigabe', retoureId: retoure.id, positionId: f.positionId, zustand: v.zustand, ergebnis: 'abgelehnt' });
+    kommentarSim(speicher, retoureId, zeit, 'ZW abgelehnt: ' + v.zustand + ' (' + f.positionId + '), nichts angelegt');
+    protokollieren(speicher, jetzt, { benutzer: von, aktion: 'freigabe', retoureId, positionId: f.positionId, zustand: v.zustand, ergebnis: 'abgelehnt' });
     return html(200, 'Abgelehnt', '<h1>Abgelehnt</h1><p>Es wurde nichts angelegt. Das Lager sieht den Status auf der ZW-Station.</p>');
   }
   if (body.entscheidung !== 'freigeben') return html(400, 'Unklar', '<h1>Keine Entscheidung erkannt</h1>');
 
-  // Probelauf: plenty-Kopie und Shopware-Klon werden nur nachgestellt.
-  // Neu berechnen, falls sich seit der Anfrage etwas geändert hat (z. B. ZW-Artikel inzwischen angelegt).
-  const aktuell = vorschauPosition(speicher, f.positionId, v.zustand, e);
-  if (aktuell.fehler) {
-    speicher.positionen[f.positionId] = Object.assign({}, f.st, { status: 'fehler', meldung: aktuell.fehler, aktualisiert: zeit });
-    retoure.kommentare.push({ zeit, text: 'ZW-Fehler (' + f.positionId + '): ' + aktuell.fehler });
-    protokollieren(speicher, jetzt, { benutzer: von, aktion: 'freigabe', retoureId: retoure.id, positionId: f.positionId, zustand: v.zustand, ergebnis: 'fehler', meldung: aktuell.fehler });
-    return html(200, 'Fehler', '<h1>Fehler</h1><p>' + esc(aktuell.fehler) + '</p>');
-  }
-
+  // Probelauf: plenty-Kopie und Shopware-Klon werden nur nachgestellt (IDs mit „SIM-“).
   const sim = speicher.sim;
-  let zw = sim.zwArtikel[aktuell.barcode];
-  const plus1 = !!zw;
-  if (zw) {
+  const echtVorhanden = v.bestehendeVarianteId && !v.bestehendSimuliert;
+  let zw = sim.zwArtikel[v.barcode];
+  let plus1;
+  let varianteId;
+  if (echtVorhanden) {
+    plus1 = true;
+    varianteId = v.bestehendeVarianteId;
+  } else if (zw) {
+    plus1 = true;
     zw.bestand += 1;
+    varianteId = zw.varianteId;
   } else {
-    zw = {
-      varianteId: String(sim.naechsteVarianteId++), artikelId: String(sim.naechsteArtikelId++),
-      originalVarianteId: aktuell.originalVarianteId, zustand: v.zustand, bestand: 1,
-      preis: aktuell.preis, streichpreis: aktuell.streichpreis, name: aktuell.name, variantennummer: aktuell.variantennummer,
-    };
-    sim.zwArtikel[aktuell.barcode] = zw;
+    plus1 = false;
+    zw = { varianteId: 'SIM-' + (sim.naechsteNr++), originalVarianteId: v.originalVarianteId, zustand: v.zustand, bestand: 1, preis: v.preis };
+    sim.zwArtikel[v.barcode] = zw;
+    varianteId = zw.varianteId;
   }
-  const kommentar = zwKommentar({ zustand: v.zustand, varianteId: zw.varianteId, plus1 });
-  retoure.kommentare.push({ zeit, text: kommentar });
+  const kommentar = zwKommentar({ zustand: v.zustand, varianteId, plus1 });
+  kommentarSim(speicher, retoureId, zeit, kommentar);
   speicher.zwListe.push({
-    datum: zeit.slice(0, 10), retoureId: retoure.id, originalVarianteId: aktuell.originalVarianteId,
-    zwArtikelId: zw.artikelId || '', zwVarianteId: zw.varianteId, barcode: aktuell.barcode, name: aktuell.name,
-    zustand: v.zustand, preis: plus1 ? zw.preis || aktuell.preis : aktuell.preis, streichpreis: aktuell.streichpreis,
-    neuOderPlus1: plus1 ? '+1' : 'neu', freigegebenVon: von, bestandGebucht: false,
+    id: 'Z' + (sim.naechsteZeile++), datum: zeit.slice(0, 10), retoureId, originalVarianteId: v.originalVarianteId,
+    zwVarianteId: varianteId, barcode: v.barcode, name: v.name, zustand: v.zustand, preis: v.preis, streichpreis: v.streichpreis,
+    neuOderPlus1: plus1 ? '+1' : 'neu', freigegebenVon: von, probelauf: true, bestandGebucht: false, gebuchtVon: null, gebuchtAm: null,
   });
-  // Prüfung: im Probelauf werden die nachgestellten Daten gegeneinander geprüft.
-  const pruefung = zw.varianteId && sim.zwArtikel[aktuell.barcode] === zw ? 'ok' : 'abweichung';
   speicher.positionen[f.positionId] = Object.assign({}, f.st, {
-    status: plus1 ? 'plus1' : 'angelegt', varianteId: zw.varianteId, barcode: aktuell.barcode,
-    preis: aktuell.preis, meldung: kommentar, pruefung, aktualisiert: zeit,
+    status: plus1 ? 'plus1' : 'angelegt', varianteId, barcode: v.barcode, preis: v.preis, meldung: kommentar, aktualisiert: zeit,
   });
-  protokollieren(speicher, jetzt, { benutzer: von, aktion: 'freigabe', retoureId: retoure.id, positionId: f.positionId, zustand: v.zustand, ergebnis: plus1 ? 'plus1' : 'angelegt', varianteId: zw.varianteId, preis: aktuell.preis });
-  retoureAbschliessenWennFertig(speicher, retoure, jetzt, e);
+  protokollieren(speicher, jetzt, { benutzer: von, aktion: 'freigabe', retoureId, positionId: f.positionId, zustand: v.zustand, ergebnis: plus1 ? 'plus1' : 'angelegt', varianteId, preis: v.preis });
+  retoureAbschliessenWennFertig(speicher, retoureId, jetzt, e);
   return html(200, 'Freigegeben', '<h1>Freigegeben</h1><p>' + esc(kommentar) + '</p><p>Probelauf: nachgestellt, nichts in plenty oder Shopware geändert.</p>');
 }
 
-function retoureAbschliessenWennFertig(speicher, retoure, jetzt, e) {
-  const fertigStatus = String(e.statusFertig || '9.3');
-  const fertig = retoure.positionen.every((p) => ERLEDIGT.includes(positionsStatus(speicher, p.positionId).status));
-  if (fertig && retoure.status !== fertigStatus) {
-    retoure.status = fertigStatus;
-    retoure.kommentare.push({ zeit: new Date(jetzt).toISOString(), text: 'Alle Positionen entschieden, Status ' + fertigStatus });
-    protokollieren(speicher, jetzt, { benutzer: 'automatisch', aktion: 'status', retoureId: retoure.id, ergebnis: fertigStatus });
+function retoureAbschliessenWennFertig(speicher, retoureId, jetzt, e) {
+  const r = speicher.cache.retouren[retoureId];
+  if (!r || !r.positionIds.length) return;
+  const fertig = r.positionIds.every((p) => ERLEDIGT.includes(positionsStatus(speicher, p).status));
+  if (fertig && !speicher.retourenFertig[retoureId]) {
+    const status = String(e.statusFertig || '9.3');
+    speicher.retourenFertig[retoureId] = new Date(jetzt).toISOString();
+    kommentarSim(speicher, retoureId, new Date(jetzt).toISOString(), 'Alle Positionen entschieden, Status ' + status + ' (Probelauf: nicht gesetzt)');
+    protokollieren(speicher, jetzt, { benutzer: 'automatisch', aktion: 'status', retoureId, ergebnis: status + ' (Probelauf)' });
   }
 }
+
+// ---------- ZW-Liste ----------
+
+function zwListeBuchen(speicher, body, person, jetzt) {
+  const zeile = speicher.zwListe.find((z) => z.id === String(body.id || ''));
+  if (!zeile) abbrechen(404, 'Zeile nicht gefunden.');
+  const gebucht = body.gebucht !== false;
+  zeile.bestandGebucht = gebucht;
+  zeile.gebuchtVon = gebucht ? person.benutzer : null;
+  zeile.gebuchtAm = gebucht ? new Date(jetzt).toISOString() : null;
+  protokollieren(speicher, jetzt, { benutzer: person.benutzer, aktion: 'bestand-gebucht', retoureId: zeile.retoureId, ergebnis: gebucht ? 'gebucht' : 'zurückgenommen', varianteId: zeile.zwVarianteId });
+  return json(200, { ok: true, zeile });
+}
+
+// ---------- Mailversand ----------
 
 // Nach dem Mailversand (Baustein „Mailergebnis“): Fehlgeschlagene Mails vermerken und die Antwort an die Seite anpassen.
 // „gesendet“ ist die Ausgabe von „Freigabe-Mail senden“, in derselben Reihenfolge wie „mails“.
 function zwNachMailversand(antwort, gesendet, speicher, jetzt) {
   const mails = antwort.mails || [];
-  const daten = JSON.parse(antwort.body);
+  const inhalt = JSON.parse(antwort.body);
   mails.forEach((m, i) => {
     const r = gesendet[i];
     const fehler = !r ? 'keine Rückmeldung vom Mailversand' : (r.error ? (r.error.message || r.error) : null);
     if (!fehler) return;
     zwMailfehler(speicher, m.positionId, String(fehler).slice(0, 300), jetzt);
-    const eintrag = (daten.ergebnisse || []).find((x) => x.positionId === m.positionId);
+    const eintrag = (inhalt.ergebnisse || []).find((x) => x.positionId === m.positionId);
     if (eintrag) Object.assign(eintrag, speicher.positionen[m.positionId]);
   });
-  return { status: antwort.status, contentType: antwort.contentType, body: JSON.stringify(daten) };
+  return { status: antwort.status, contentType: antwort.contentType, body: JSON.stringify(inhalt) };
 }
 
 // Mail konnte nicht gesendet werden: Position auf Fehler setzen.
@@ -549,11 +673,10 @@ function zwMailfehler(speicher, positionId, meldung, jetzt) {
   if (!st || st.status !== 'wartet') return;
   const zeit = new Date(jetzt).toISOString();
   speicher.positionen[positionId] = Object.assign({}, st, { status: 'fehler', meldung: 'Freigabe-Mail nicht gesendet: ' + meldung, aktualisiert: zeit });
-  const fund = positionFinden(speicher, positionId);
-  if (fund) fund.retoure.kommentare.push({ zeit, text: 'ZW-Fehler (' + positionId + '): Freigabe-Mail nicht gesendet' });
+  if (st.retoureId) kommentarSim(speicher, st.retoureId, zeit, 'ZW-Fehler (' + positionId + '): Freigabe-Mail nicht gesendet');
   protokollieren(speicher, jetzt, { benutzer: 'automatisch', aktion: 'freigabe-mail', positionId, ergebnis: 'fehler', meldung });
 }
 
 // NUR-NODE-ANFANG
-module.exports = { zwVerarbeiten, zwMailfehler, zwNachMailversand };
+module.exports = { zwVerarbeiten, zwVorbereiten, zwRundeB, zwRoute, zwMailfehler, zwNachMailversand };
 // NUR-NODE-ENDE
