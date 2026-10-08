@@ -2,12 +2,15 @@
 // Stand Phase 6.0: Retouren, Artikel und Preise kommen echt aus plenty und Shopware (nur lesend).
 // Anlegen wird nur nachgestellt: nichts wird in plenty oder Shopware geschrieben („Probelauf“).
 // Trockenlauf: Beim Anlegen werden alle Schreibbefehle mit echten Daten gebaut und auf der Freigabe-Seite gezeigt, nicht gesendet.
+// TMP-Tabelle: Alles, was im Echtbetrieb in plenty oder Shopware geschrieben würde (Kopie, Klon, +1, Kommentare, Status),
+// hängt als „schreiben“ an der Antwort. n8n schreibt es in die Data Table ZW_TMP. Die IT ersetzt diesen Baustein
+// später durch die echten Schreib-Bausteine.
 // Der Zustand (Protokoll, offene Freigaben, ZW-Liste, Zwischenspeicher) liegt im Speicher des Workflows.
 // Beim Bauen des n8n-Workflows wird alles zwischen NUR-NODE-ANFANG und NUR-NODE-ENDE entfernt.
 //
 // Ablauf in n8n pro Anfrage:
 //   Webhook → Einstellungen → Vorbereiten (zwVorbereiten) → [plenty Runde A → Runde B planen (zwRundeB)
-//   → plenty Runde B → Shopware] → ZW-Logik (zwVerarbeiten) → Antwort
+//   → plenty Runde B → Shopware] → ZW-Logik (zwVerarbeiten) → [Mails] → [TMP-Tabelle (zwNachTmp)] → Antwort
 // Die eckigen Klammern laufen nur, wenn Daten gebraucht werden.
 
 // NUR-NODE-ANFANG
@@ -20,7 +23,7 @@ const {
   LEER_PLENTY, LEER_SHOPWARE, retourenNummer, anfrageRetourenListe, anfrageRetoure, anfrageVarianten, anfrageBarcode, shopwareSuche,
   anfrageOriginale, anfrageArtikel, artikelIdsAus, plentyFehler, eintraege, artikelPositionen, rabattPositionen, shopAuftrag, eanAusVariante, textOhneHtml, shopwareNachNummer,
 } = require('./quellen.js');
-const { zwSchreibplan, retoureBefehle, schreibplanHtml, NEU_VARIANTE } = require('./schreibplan.js');
+const { zwSchreibplan, retoureBefehle, kommentarBefehl, statusBefehl, infoZeile, tmpZeile, schreibplanHtml, NEU_VARIANTE } = require('./schreibplan.js');
 // NUR-NODE-ENDE
 
 const ERLEDIGT = ['angelegt', 'plus1', 'nicht_verkaufbar', 'kein_zw'];
@@ -123,13 +126,16 @@ function zwRundeB(plan, antwortenA) {
 }
 
 // Schritt 3 in n8n: die eigentliche Aktion. k.daten = { plan, a, b, shopware } wenn Daten geholt wurden.
+// Schreibbefehle dieser Anfrage hängen danach als „schreiben“ an der Antwort.
 function zwVerarbeiten(anfrage, k) {
+  let antwort;
   try {
-    return zwAktion(anfrage, k);
+    antwort = zwAktion(anfrage, k);
   } catch (e) {
-    if (e && e.zwAntwort) return e.zwAntwort;
-    return json(500, { ok: false, fehler: 'Interner Fehler: ' + (e && e.message ? e.message : String(e)) });
+    if (e && e.zwAntwort) antwort = e.zwAntwort;
+    else antwort = json(500, { ok: false, fehler: 'Interner Fehler: ' + (e && e.message ? e.message : String(e)) });
   }
+  return schreibenAnhaengen(antwort, k.speicher, k.jetzt);
 }
 
 function zwAktion(anfrage, k) {
@@ -303,9 +309,70 @@ function daten(k, art) {
   return d;
 }
 
-function kommentarSim(speicher, retoureId, zeit, text) {
+// Kommentar in der Retoure: im Probelauf nur im Speicher, dazu als Schreibbefehl für die TMP-Tabelle.
+// extra: { aktion, positionId, echtText } – echtText ist der Text für plenty, falls er vom Probelauf-Text abweicht.
+function kommentarSim(speicher, retoureId, zeit, text, extra) {
   if (!speicher.kommentare[retoureId]) speicher.kommentare[retoureId] = [];
   speicher.kommentare[retoureId].push({ zeit, text });
+  const x = extra || {};
+  ausgangMerken(speicher, { aktion: x.aktion, retoureId, positionId: x.positionId }, [kommentarBefehl(retoureId, x.echtText || text)]);
+}
+
+// ---------- Schreibbefehle für die TMP-Tabelle ----------
+// Während einer Anfrage sammeln sich die Befehle in speicher.ausgang. Am Ende hängen sie als Zeilen an der Antwort
+// und werden aus dem Speicher entfernt, sie bleiben also nie im Speicher des Workflows liegen.
+
+function ausgangMerken(speicher, meta, befehle) {
+  if (!speicher.ausgang) speicher.ausgang = [];
+  for (const b of befehle) speicher.ausgang.push(Object.assign({}, b, meta));
+}
+
+function schreibenAnhaengen(antwort, speicher, jetzt) {
+  const neu = (speicher && speicher.ausgang) || [];
+  if (speicher) delete speicher.ausgang;
+  if (!neu.length) return antwort;
+  const bisher = antwort.schreiben || [];
+  const lauf = bisher.length ? bisher[0].lauf : laufId(jetzt);
+  const zeit = new Date(jetzt).toISOString();
+  antwort.schreiben = bisher.concat(neu.map((b, i) => tmpZeile(b, bisher.length + i + 1, lauf, zeit)));
+  return antwort;
+}
+
+// Kennung eines Laufs: Zeit plus Zufall, z. B. 20261007T100000-3fa9c1
+function laufId(jetzt) {
+  const z = zufallsHex();
+  return new Date(jetzt).toISOString().replace(/[-:]/g, '').slice(0, 15) + '-' + (z ? z.slice(0, 6) : String(Math.random()).slice(2, 8));
+}
+
+// Nach „TMP-Tabelle schreiben“ (Baustein „TMP-Ergebnis“): Ergebnis ins Protokoll, Hinweis in die Antwort.
+// ergebnisse ist die Ausgabe von „TMP-Tabelle schreiben“, eine Zeile pro Befehl.
+function zwNachTmp(antwort, ergebnisse, speicher, jetzt) {
+  speicherVorbereiten(speicher);
+  const zeilen = antwort.schreiben || [];
+  const lauf = zeilen.length ? zeilen[0].lauf : '';
+  const fehlerItem = (ergebnisse || []).find((r) => r && r.error);
+  let fehler = null;
+  if (fehlerItem) fehler = String(fehlerItem.error.message || fehlerItem.error).slice(0, 300);
+  else if ((ergebnisse || []).length < zeilen.length) fehler = 'nur ' + (ergebnisse || []).length + ' von ' + zeilen.length + ' Zeilen bestätigt';
+  const ersteRetoure = (zeilen.find((z) => z.retoureId) || {}).retoureId;
+  protokollieren(speicher, jetzt, {
+    benutzer: 'automatisch', aktion: 'tmp-tabelle', retoureId: ersteRetoure || undefined,
+    ergebnis: fehler ? 'fehler' : 'geschrieben', meldung: fehler || zeilen.length + ' Zeilen, Lauf ' + lauf,
+  });
+  const aus = { status: antwort.status, contentType: antwort.contentType, body: antwort.body };
+  if (String(antwort.contentType || '').startsWith('text/html')) {
+    const satz = fehler
+      ? '<div class="w">TMP-Tabelle ZW_TMP: nicht geschrieben (' + esc(fehler) + ').</div>'
+      : '<p class="m">' + zeilen.length + ' Schreibbefehle in die Tabelle ZW_TMP geschrieben (Lauf ' + esc(lauf) + ').</p>';
+    aus.body = aus.body.includes('</div></body>') ? aus.body.replace('</div></body>', satz + '</div></body>') : aus.body + satz;
+  } else {
+    try {
+      const inhalt = JSON.parse(aus.body);
+      inhalt.tmp = { lauf, zeilen: zeilen.length, fehler };
+      aus.body = JSON.stringify(inhalt);
+    } catch (err) { /* Antwort unverändert lassen */ }
+  }
+  return aus;
 }
 
 // ---------- Anmeldung ----------
@@ -641,7 +708,7 @@ function anlegen(speicher, body, e, person, jetzt, url, quellen) {
       if (!pos) { ergebnisse.push({ positionId: x.positionId, status: 'fehler', meldung: v.fehler }); continue; }
       const st = Object.assign({ status: 'fehler', meldung: v.fehler, versuch: (bisher.versuch || 0) }, gemeinsam);
       speicher.positionen[x.positionId] = st;
-      kommentarSim(speicher, pos.retoureId, gemeinsam.aktualisiert, 'ZW-Fehler (' + x.positionId + '): ' + v.fehler);
+      kommentarSim(speicher, pos.retoureId, gemeinsam.aktualisiert, 'ZW-Fehler (' + x.positionId + '): ' + v.fehler, { aktion: 'anlegen', positionId: x.positionId });
       protokollieren(speicher, jetzt, { benutzer: person.benutzer, aktion: 'anlegen', retoureId: pos.retoureId, positionId: x.positionId, zustand: x.zustand, ergebnis: 'fehler', meldung: v.fehler });
       ergebnisse.push(Object.assign({ positionId: x.positionId }, st));
       continue;
@@ -652,7 +719,7 @@ function anlegen(speicher, body, e, person, jetzt, url, quellen) {
       const kommentar = zwKommentar({ zustand: x.zustand, grund: x.grund });
       const st = Object.assign({ status, meldung: kommentar }, gemeinsam);
       speicher.positionen[x.positionId] = st;
-      kommentarSim(speicher, pos.retoureId, gemeinsam.aktualisiert, kommentar + ' (' + x.positionId + ')');
+      kommentarSim(speicher, pos.retoureId, gemeinsam.aktualisiert, kommentar + ' (' + x.positionId + ')', { aktion: 'anlegen', positionId: x.positionId });
       protokollieren(speicher, jetzt, { benutzer: person.benutzer, aktion: 'entscheidung', retoureId: pos.retoureId, positionId: x.positionId, zustand: x.zustand, ergebnis: status, meldung: x.grund || undefined });
       retoureAbschliessenWennFertig(speicher, pos.retoureId, jetzt, e);
       if (status === 'nicht_verkaufbar') mails.push(Object.assign(bueroMail(speicher, pos, x, person, e, bueroAn), { anhaenge: x.bilder }));
@@ -820,7 +887,7 @@ function freigabeEntscheiden(body, e, speicher, jetzt) {
 
   if (body.entscheidung === 'ablehnen') {
     speicher.positionen[f.positionId] = Object.assign({}, f.st, { status: 'abgelehnt', meldung: 'Abgelehnt, nichts angelegt', aktualisiert: zeit });
-    kommentarSim(speicher, retoureId, zeit, 'ZW abgelehnt: ' + v.zustand + ' (' + f.positionId + '), nichts angelegt');
+    kommentarSim(speicher, retoureId, zeit, 'ZW abgelehnt: ' + v.zustand + ' (' + f.positionId + '), nichts angelegt', { aktion: 'freigabe', positionId: f.positionId });
     protokollieren(speicher, jetzt, { benutzer: von, aktion: 'freigabe', retoureId, positionId: f.positionId, zustand: v.zustand, ergebnis: 'abgelehnt' });
     return html(200, 'Abgelehnt', '<h1>Abgelehnt</h1><p>Es wurde nichts angelegt. Das Lager sieht den Status auf der ZW-Station.</p>');
   }
@@ -847,7 +914,13 @@ function freigabeEntscheiden(body, e, speicher, jetzt) {
   }
   const kommentar = zwKommentar({ zustand: v.zustand, varianteId, plus1, grund: v.grund });
   const neuerStatus = statusWennFertig(speicher, retoureId, f.positionId, e);
-  kommentarSim(speicher, retoureId, zeit, kommentar);
+  // TMP-Tabelle: erst Artikel anlegen bzw. +1, dann Kommentar (mit der neuen Varianten-ID als Platzhalter), dann Status
+  const plan = schreibplan(speicher, f.positionId, f.versuch);
+  ausgangMerken(speicher, { aktion: 'freigabe', retoureId, positionId: f.positionId }, freigabeBefehle(plan, v, plus1, varianteId, jetzt));
+  kommentarSim(speicher, retoureId, zeit, kommentar, {
+    aktion: 'freigabe', positionId: f.positionId,
+    echtText: plus1 ? kommentar : zwKommentar({ zustand: v.zustand, varianteId: NEU_VARIANTE, plus1: false, grund: v.grund }),
+  });
   speicher.zwListe.push({
     id: 'Z' + (sim.naechsteZeile++), datum: zeit.slice(0, 10), retoureId, originalVarianteId: v.originalVarianteId,
     zwVarianteId: varianteId, barcode: v.barcode, name: v.name, zustand: v.zustand, grund: v.grund || '', bilder: v.bilder || 0,
@@ -860,7 +933,17 @@ function freigabeEntscheiden(body, e, speicher, jetzt) {
   protokollieren(speicher, jetzt, { benutzer: von, aktion: 'freigabe', retoureId, positionId: f.positionId, zustand: v.zustand, ergebnis: plus1 ? 'plus1' : 'angelegt', varianteId, preis: v.preis });
   retoureAbschliessenWennFertig(speicher, retoureId, jetzt, e);
   return html(200, 'Freigegeben', '<h1>Freigegeben</h1><p>' + esc(kommentar) + '</p><p>Probelauf: nachgestellt, nichts in plenty oder Shopware geändert.</p>' +
-    schreibplanHtml(schreibplan(speicher, f.positionId, f.versuch), retoureBefehle(retoureId, kommentar, neuerStatus)));
+    schreibplanHtml(plan, retoureBefehle(retoureId, kommentar, neuerStatus)));
+}
+
+// Schreibbefehle nach „Freigeben“: der beim Anlegen gebaute Plan, davor seine Hinweise als Info-Zeilen.
+// Gibt es den ZW-Artikel inzwischen im Probelauf (zweites Stück im selben Zustand), gilt +1 statt neu.
+function freigabeBefehle(plan, v, plus1, varianteId, jetzt) {
+  let p = plan;
+  if (plus1 && v.neu) p = zwSchreibplan(Object.assign({}, v, { neu: false, bestehendSimuliert: true, bestehendeVarianteId: varianteId }), {}, jetzt);
+  if (!p) return [infoZeile('Kein Schreibplan gespeichert', 'Der Plan zu dieser Freigabe fehlt (zu alt). Position neu anlegen.')];
+  return p.fehlt.map((x) => infoZeile('Fehlt für den Plan', x))
+    .concat(p.hinweise.map((x) => infoZeile('Hinweis', x)), p.schritte);
 }
 
 function retoureAbschliessenWennFertig(speicher, retoureId, jetzt, e) {
@@ -872,8 +955,9 @@ function retoureAbschliessenWennFertig(speicher, retoureId, jetzt, e) {
     const nichtVerkaufbar = r.positionIds.some((p) => positionsStatus(speicher, p).status === 'nicht_verkaufbar');
     const status = nichtVerkaufbar ? String(e.statusNichtVerkaufbar || '9.1.3') : String(e.statusFertig || '9.3');
     speicher.retourenFertig[retoureId] = { zeit: new Date(jetzt).toISOString(), status };
-    kommentarSim(speicher, retoureId, new Date(jetzt).toISOString(), 'Alle Positionen entschieden, Status ' + status +
-      (nichtVerkaufbar ? ' (Reklamieren, weil nicht verkaufbar)' : '') + ' (Probelauf: nicht gesetzt)');
+    const text = 'Alle Positionen entschieden, Status ' + status + (nichtVerkaufbar ? ' (Reklamieren, weil nicht verkaufbar)' : '');
+    kommentarSim(speicher, retoureId, new Date(jetzt).toISOString(), text + ' (Probelauf: nicht gesetzt)', { aktion: 'status', echtText: text });
+    ausgangMerken(speicher, { aktion: 'status', retoureId }, [statusBefehl(retoureId, status)]);
     protokollieren(speicher, jetzt, { benutzer: 'automatisch', aktion: 'status', retoureId, ergebnis: status + ' (Probelauf)' });
   }
 }
@@ -912,7 +996,7 @@ function zwNachMailversand(antwort, gesendet, speicher, jetzt) {
     zwMailfehler(speicher, m.positionId, String(fehler).slice(0, 300), jetzt);
     if (eintrag) Object.assign(eintrag, speicher.positionen[m.positionId]);
   });
-  return { status: antwort.status, contentType: antwort.contentType, body: JSON.stringify(inhalt) };
+  return schreibenAnhaengen({ status: antwort.status, contentType: antwort.contentType, body: JSON.stringify(inhalt), schreiben: antwort.schreiben }, speicher, jetzt);
 }
 
 // Mail konnte nicht gesendet werden: Position auf Fehler setzen.
@@ -921,10 +1005,10 @@ function zwMailfehler(speicher, positionId, meldung, jetzt) {
   if (!st || st.status !== 'wartet') return;
   const zeit = new Date(jetzt).toISOString();
   speicher.positionen[positionId] = Object.assign({}, st, { status: 'fehler', meldung: 'Freigabe-Mail nicht gesendet: ' + meldung, aktualisiert: zeit });
-  if (st.retoureId) kommentarSim(speicher, st.retoureId, zeit, 'ZW-Fehler (' + positionId + '): Freigabe-Mail nicht gesendet');
+  if (st.retoureId) kommentarSim(speicher, st.retoureId, zeit, 'ZW-Fehler (' + positionId + '): Freigabe-Mail nicht gesendet', { aktion: 'freigabe-mail', positionId });
   protokollieren(speicher, jetzt, { benutzer: 'automatisch', aktion: 'freigabe-mail', positionId, ergebnis: 'fehler', meldung });
 }
 
 // NUR-NODE-ANFANG
-module.exports = { zwVerarbeiten, zwVorbereiten, zwRundeB, zwRoute, zwMailfehler, zwNachMailversand };
+module.exports = { zwVerarbeiten, zwVorbereiten, zwRundeB, zwRoute, zwMailfehler, zwNachMailversand, zwNachTmp };
 // NUR-NODE-ENDE

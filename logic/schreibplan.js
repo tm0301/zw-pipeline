@@ -215,12 +215,55 @@ function zwSchreibplan(v, o, jetzt) {
   return { erstellt: new Date(jetzt).toISOString(), schritte, hinweise, fehlt };
 }
 
+// Befehle an die Retoure: Kommentar und Status
+function kommentarBefehl(retoureId, text) {
+  return befehl('plenty', 'Kommentar in Retoure ' + retoureId, 'POST', '/rest/comments',
+    { referenceType: 'order', referenceValue: Number(retoureId), text, isVisibleForContact: false });
+}
+
+// Status wie auf der Seite (9.1.3) → intern in plenty (9.13)
+function statusBefehl(retoureId, status) {
+  return befehl('plenty', 'Retoure ' + retoureId + ' auf Status ' + status, 'PUT', '/rest/orders/' + retoureId,
+    { statusId: Number(String(status).replace(/^(\d+)\.(\d+)\.(\d+)$/, '$1.$2$3')) });
+}
+
 // Befehle an die Retoure, die bei der Entscheidung dazukommen
 function retoureBefehle(retoureId, kommentar, neuerStatus) {
-  const b = [befehl('plenty', 'Kommentar in Retoure ' + retoureId, 'POST', '/rest/comments',
-    { referenceType: 'order', referenceValue: Number(retoureId), text: kommentar, isVisibleForContact: false })];
-  if (neuerStatus) b.push(befehl('plenty', 'Retoure ' + retoureId + ' auf Status ' + neuerStatus, 'PUT', '/rest/orders/' + retoureId, { statusId: Number(neuerStatus.replace(/^(\d+)\.(\d+)\.(\d+)$/, '$1.$2$3')) }));
+  const b = [kommentarBefehl(retoureId, kommentar)];
+  if (neuerStatus) b.push(statusBefehl(retoureId, neuerStatus));
   return b;
+}
+
+// ---------- TMP-Tabelle: Schreibbefehle als Zeilen statt senden ----------
+// Die IT ersetzt später den Baustein „TMP-Tabelle schreiben“ durch echte Schreib-Bausteine.
+// Eine Zeile = ein Befehl. Zeilen eines Laufs (lauf) gehören zusammen und laufen in der Reihenfolge von nr.
+
+// Platzhalter wie ‹neue Varianten-ID› in einem Befehl (Endpunkt und Inhalt)
+function platzhalterIn(b) {
+  const text = b.endpoint + ' ' + (b.body === undefined ? '' : (typeof b.body === 'string' ? b.body : JSON.stringify(b.body)));
+  return [...new Set(text.match(/‹[^›]*›/g) || [])];
+}
+
+// Hinweis für die Prüfung, kein Schreibbefehl (system „info“, wird beim echten Schreiben übersprungen)
+function infoZeile(titel, hinweis) {
+  return { system: 'info', titel, method: '', endpoint: '', hinweis };
+}
+
+function tmpZeile(b, nr, lauf, zeit) {
+  return {
+    lauf, nr, zeit,
+    aktion: b.aktion || '',
+    retoureId: b.retoureId ? String(b.retoureId) : '',
+    positionId: b.positionId ? String(b.positionId) : '',
+    system: b.system,
+    titel: b.titel,
+    method: b.method || '',
+    endpoint: b.endpoint || '',
+    body: b.body === undefined ? '' : (typeof b.body === 'string' ? b.body : JSON.stringify(b.body, null, 2)),
+    hinweis: b.hinweis || '',
+    platzhalter: b.system === 'info' ? '' : platzhalterIn(b).join(', '),
+    status: b.system === 'info' ? 'info' : 'offen',
+  };
 }
 
 // Plan als HTML für die Freigabe-Seite
@@ -239,5 +282,5 @@ function schreibplanHtml(plan, extra) {
 }
 
 // NUR-NODE-ANFANG
-module.exports = { NEU_VARIANTE, zwSchreibplan, retoureBefehle, schreibplanHtml, shopwarePreis, shopwareBeschreibung, PLENTY_ZW, SHOPWARE_BWARE, SHOPWARE_ZUSTAND };
+module.exports = { NEU_VARIANTE, zwSchreibplan, retoureBefehle, kommentarBefehl, statusBefehl, infoZeile, tmpZeile, platzhalterIn, schreibplanHtml, shopwarePreis, shopwareBeschreibung, PLENTY_ZW, SHOPWARE_BWARE, SHOPWARE_ZUSTAND };
 // NUR-NODE-ENDE

@@ -130,6 +130,29 @@ const codeMailergebnis = mitKopf(nurNoetig(['zwNachMailversand']) + '\n' +
   ');\n' +
   'return [{ json: antwort }];\n');
 
+// TMP-Tabelle: Statt in plenty und Shopware zu schreiben, landen alle Schreibbefehle als Zeilen in der Data Table ZW_TMP.
+// Die IT ersetzt später „TMP-Tabelle schreiben“ durch die echten Schreib-Bausteine (siehe docs/tmp-tabelle.md).
+const TMP_TABELLE = 'ZW_TMP';
+const TMP_SPALTEN = [
+  ['lauf', 'string'], ['nr', 'number'], ['zeit', 'string'], ['aktion', 'string'], ['retoureId', 'string'], ['positionId', 'string'],
+  ['system', 'string'], ['titel', 'string'], ['method', 'string'], ['endpoint', 'string'], ['body', 'string'], ['hinweis', 'string'],
+  ['platzhalter', 'string'], ['status', 'string'],
+];
+
+const codeSchreibbefehleAufteilen = mitKopf(
+  '// Eine Zeile pro Schreibbefehl, in der Reihenfolge von nr. Die Felder sind die Spalten der Data Table ' + TMP_TABELLE + '.\n' +
+  'return ($input.first().json.schreiben || []).map((zeile) => ({ json: zeile }));\n');
+
+const codeTmpErgebnis = mitKopf(nurNoetig(['zwNachTmp']) + '\n' +
+  '// Ergebnis von „TMP-Tabelle schreiben“ ins Protokoll, Hinweis in die Antwort. Danach antwortet „Antwort senden“.\n' +
+  'const antwort = zwNachTmp(\n' +
+  '  $(\'Schreibbefehle da?\').first().json,\n' +
+  '  $input.all().map((item) => item.json),\n' +
+  '  $getWorkflowStaticData(\'global\'),\n' +
+  '  Date.now(),\n' +
+  ');\n' +
+  'return [{ json: antwort }];\n');
+
 // Feste IDs, damit ein erneuter Import dieselben Bausteine ergibt
 const id = (name) => {
   const h = createHash('sha256').update('zw-pipeline|' + name).digest('hex');
@@ -282,7 +305,7 @@ nodes.push({
   position: [2060, mitte],
 });
 verbinde('Mails da?', 'Freigabe-Mails aufteilen', 0);
-verbinde('Mails da?', 'Antwort senden', 1);
+verbinde('Mails da?', 'Schreibbefehle da?', 1);
 
 nodes.push({
   parameters: { jsCode: codeMailsAufteilen },
@@ -311,7 +334,65 @@ nodes.push({
   id: id('Mailergebnis'), name: 'Mailergebnis', type: 'n8n-nodes-base.code', typeVersion: 2,
   position: [2720, mitte - 160],
 });
-verbinde('Mailergebnis', 'Antwort senden');
+verbinde('Mailergebnis', 'Schreibbefehle da?');
+
+// Schreibbefehle (plenty, Shopware, Kommentare, Status) in die TMP-Tabelle statt in die Systeme
+nodes.push({
+  parameters: {
+    conditions: {
+      options: { caseSensitive: true, leftValue: '', typeValidation: 'strict' },
+      conditions: [{
+        id: id('bedingung|schreiben'),
+        leftValue: '={{ ($json.schreiben || []).length > 0 }}',
+        rightValue: '',
+        operator: { type: 'boolean', operation: 'true', singleValue: true },
+      }],
+      combinator: 'and',
+    },
+    options: {},
+  },
+  id: id('Schreibbefehle da?'), name: 'Schreibbefehle da?', type: 'n8n-nodes-base.if', typeVersion: 2,
+  position: [2940, mitte],
+});
+verbinde('Schreibbefehle da?', 'Schreibbefehle aufteilen', 0);
+verbinde('Schreibbefehle da?', 'Antwort senden', 1);
+
+nodes.push({
+  parameters: { jsCode: codeSchreibbefehleAufteilen },
+  id: id('Schreibbefehle aufteilen'), name: 'Schreibbefehle aufteilen', type: 'n8n-nodes-base.code', typeVersion: 2,
+  position: [3160, mitte - 160],
+});
+verbinde('Schreibbefehle aufteilen', 'TMP-Tabelle schreiben');
+
+nodes.push({
+  parameters: {
+    resource: 'row',
+    operation: 'insert',
+    dataTableId: { __rl: true, mode: 'name', value: TMP_TABELLE },
+    columns: {
+      mappingMode: 'autoMapInputData',
+      value: {},
+      matchingColumns: [],
+      schema: TMP_SPALTEN.map(([name, type]) => ({
+        id: name, displayName: name, required: false, defaultMatch: false, display: true, type, canBeUsedToMatch: true,
+      })),
+    },
+    options: {},
+  },
+  id: id('TMP-Tabelle schreiben'), name: 'TMP-Tabelle schreiben', type: 'n8n-nodes-base.dataTable', typeVersion: 1.1,
+  position: [3380, mitte - 160], onError: 'continueRegularOutput', alwaysOutputData: true,
+  notes: 'Platzhalter für die IT: hier kommen später die echten Schreib-Bausteine für plenty und Shopware hin. ' +
+    'Eine Zeile = ein Befehl, je lauf in der Reihenfolge von nr. Zeilen mit system = info überspringen. Siehe docs/tmp-tabelle.md.',
+  notesInFlow: true,
+});
+verbinde('TMP-Tabelle schreiben', 'TMP-Ergebnis');
+
+nodes.push({
+  parameters: { jsCode: codeTmpErgebnis },
+  id: id('TMP-Ergebnis'), name: 'TMP-Ergebnis', type: 'n8n-nodes-base.code', typeVersion: 2,
+  position: [3600, mitte - 160],
+});
+verbinde('TMP-Ergebnis', 'Antwort senden');
 
 nodes.push({
   parameters: {
@@ -331,7 +412,7 @@ nodes.push({
     },
   },
   id: id('Antwort senden'), name: 'Antwort senden', type: 'n8n-nodes-base.respondToWebhook', typeVersion: 1.1,
-  position: [2940, mitte],
+  position: [3820, mitte],
 });
 
 const workflow = {

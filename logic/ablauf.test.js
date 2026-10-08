@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
-const { zwVerarbeiten, zwVorbereiten, zwRundeB, zwMailfehler, zwNachMailversand } = require('./ablauf.js');
+const { zwVerarbeiten, zwVorbereiten, zwRundeB, zwMailfehler, zwNachMailversand, zwNachTmp } = require('./ablauf.js');
 
 const BASIS = 'https://mykitchens.app.n8n.cloud/webhook/zw-station';
 
@@ -798,4 +798,136 @@ test('Trockenlauf: fehlt das plenty-Original, zeigt der Plan das an und Anlegen 
   } finally {
     ORIGINALE[772162] = gesichert;
   }
+});
+
+// ---------- TMP-Tabelle: Schreibbefehle als Zeilen statt senden ----------
+
+const SPALTEN = ['lauf', 'nr', 'zeit', 'aktion', 'retoureId', 'positionId', 'system', 'titel', 'method', 'endpoint', 'body', 'hinweis', 'platzhalter', 'status'];
+
+test('TMP-Tabelle: jeder Schreibbefehl wird eine Zeile, nichts bleibt im Speicher', () => {
+  const { k, rufe, anmelden, link } = aufbau();
+  const s = anmelden('lager1', 'Passwort-Lager1');
+  assert.equal(rufe('retoure', { schluessel: s, query: { nr: '241900' } }).schreiben, undefined, 'Lesen erzeugt keine Zeilen');
+
+  const a = rufe('anlegen', { schluessel: s, body: { entscheidungen: [
+    { positionId: '5101', zustand: 'Kein ZW' },
+    { positionId: '5102', zustand: 'Gut', grund: 'Kratzer an der Seite' },
+    { positionId: '5103', zustand: 'Nicht verkaufbar', grund: 'Glasfront gebrochen' },
+  ] } });
+  assert.equal(k.speicher.ausgang, undefined);
+  assert.deepEqual(a.schreiben.map((z) => [z.nr, z.aktion, z.positionId, z.method, z.endpoint, JSON.parse(z.body).text]), [
+    [1, 'anlegen', '5101', 'POST', '/rest/comments', 'Kein ZW (5101)'],
+    [2, 'anlegen', '5103', 'POST', '/rest/comments', 'Nicht verkaufbar, an Büro. Grund: Glasfront gebrochen (5103)'],
+  ]);
+  for (const z of a.schreiben) {
+    assert.deepEqual(Object.keys(z), SPALTEN);
+    assert.equal(z.status, 'offen');
+    assert.equal(z.retoureId, '241900');
+    assert.equal(z.zeit, '2026-10-07T10:00:00.000Z');
+    assert.match(z.lauf, /^20261007T100000-[0-9a-f]{6}$/);
+  }
+  assert.equal(a.schreiben[0].lauf, a.schreiben[1].lauf);
+
+  const f = rufe('freigabe-entscheiden', { body: Object.assign({}, link(a.mails[0]), { entscheidung: 'freigeben' }) });
+  assert.equal(k.speicher.ausgang, undefined);
+  const z = f.schreiben;
+  assert.notEqual(z[0].lauf, a.schreiben[0].lauf, 'neuer Lauf');
+  assert.deepEqual(z.map((x) => x.nr), z.map((_, i) => i + 1));
+  assert.ok(z.every((x) => x.aktion && x.retoureId === '241900'));
+  // Reihenfolge: Hinweise, plenty-Kopie, Shopware-Klon, Kommentar, Abschluss-Kommentar, Status
+  const echt = z.filter((x) => x.system !== 'info');
+  assert.equal(echt[0].titel, 'Artikel mit Hauptvariante anlegen');
+  assert.equal(echt[0].platzhalter, '');
+  assert.ok(z.slice(0, z.indexOf(echt[0])).every((x) => x.system === 'info' && x.status === 'info'));
+  assert.ok(z.some((x) => x.titel === 'Barcode EAN1' && JSON.parse(x.body).code === '4242003000002ZW3' && x.platzhalter === '‹neue Artikel-ID›, ‹neue Varianten-ID›'));
+  const klon = z.find((x) => x.titel.startsWith('Original 772162 klonen'));
+  assert.equal(JSON.parse(klon.body).overwrites.productNumber, '‹neue Varianten-ID›');
+  assert.deepEqual(echt.slice(-3).map((x) => [x.aktion, x.method, x.endpoint, x.body.includes('"text"') ? JSON.parse(x.body).text : JSON.parse(x.body).statusId]), [
+    ['freigabe', 'POST', '/rest/comments', 'ZW angelegt: ‹neue Varianten-ID› (Gut). Grund: Kratzer an der Seite'],
+    ['status', 'POST', '/rest/comments', 'Alle Positionen entschieden, Status 9.1.3 (Reklamieren, weil nicht verkaufbar)'],
+    ['status', 'PUT', '/rest/orders/241900', 9.13],
+  ]);
+  assert.equal(echt[echt.length - 3].platzhalter, '‹neue Varianten-ID›');
+  // Im Probelauf bleibt der Kommentar mit der nachgestellten ID
+  assert.ok(k.speicher.kommentare['241900'].some((x) => x.text === 'ZW angelegt: SIM-1 (Gut). Grund: Kratzer an der Seite'));
+});
+
+test('TMP-Tabelle: Ablehnen und +1 auf vorhandenen ZW-Artikel', () => {
+  const { rufe, anmelden, link } = aufbau();
+  const s = anmelden('lager1', 'Passwort-Lager1');
+  rufe('retoure', { schluessel: s, query: { nr: '241881' } });
+  const a = rufe('anlegen', { schluessel: s, body: { entscheidungen: [{ positionId: '5001', zustand: 'Sehr gut', grund: 'Kleine Delle hinten' }] } });
+  assert.equal(a.schreiben, undefined, 'wartet auf Freigabe: noch nichts zu schreiben');
+  const ab = rufe('freigabe-entscheiden', { body: Object.assign({}, link(a.mails[0]), { entscheidung: 'ablehnen' }) });
+  assert.deepEqual(ab.schreiben.map((x) => JSON.parse(x.body).text), ['ZW abgelehnt: Sehr gut (5001), nichts angelegt']);
+
+  const b = rufe('anlegen', { schluessel: s, body: { entscheidungen: [{ positionId: '5001', zustand: 'Sehr gut', grund: 'Kleine Delle hinten' }] } });
+  const f = rufe('freigabe-entscheiden', { body: Object.assign({}, link(b.mails[0]), { entscheidung: 'freigeben' }) });
+  assert.deepEqual(f.schreiben.filter((x) => x.system !== 'info').map((x) => [x.system, x.method, x.endpoint]), [
+    ['shopware', 'PATCH', '/api/product/zw2'],
+    ['plenty', 'POST', '/rest/comments'],
+    ['plenty', 'POST', '/rest/comments'],
+    ['plenty', 'PUT', '/rest/orders/241881'],
+  ]);
+  assert.equal(JSON.parse(f.schreiben.find((x) => x.endpoint === '/api/product/zw2').body).stock, 3);
+  assert.ok(f.schreiben.some((x) => x.system === 'info' && /plenty: kein Schreibbefehl/.test(x.hinweis)));
+});
+
+test('TMP-Tabelle: Artikel inzwischen im Probelauf angelegt → +1 statt neu', () => {
+  const { k, rufe, anmelden, link } = aufbau();
+  const s = anmelden('lager1', 'Passwort-Lager1');
+  rufe('retoure', { schluessel: s, query: { nr: '241881' } });
+  const a = rufe('anlegen', { schluessel: s, body: { entscheidungen: [{ positionId: '5001', zustand: 'Gut', grund: 'Kratzer an der Seite' }] } });
+  k.speicher.sim.zwArtikel['4002516769965ZW3'] = { varianteId: 'SIM-7', bestand: 1 };
+  const f = rufe('freigabe-entscheiden', { body: Object.assign({}, link(a.mails[0]), { entscheidung: 'freigeben' }) });
+  assert.match(f.body, /ZW \+1: SIM-7/);
+  const echt = f.schreiben.filter((x) => x.system !== 'info');
+  assert.equal(echt[0].titel, 'Bestand +1');
+  assert.equal(echt[0].endpoint, '/api/product/‹Shopware-ID von SIM-7›');
+  assert.ok(!f.schreiben.some((x) => x.endpoint === '/rest/items'), 'kein neuer Artikel');
+  assert.equal(JSON.parse(echt[1].body).text, 'ZW +1: SIM-7 (Gut). Grund: Kratzer an der Seite');
+});
+
+test('TMP-Tabelle: Mailfehler hängt seinen Kommentar an denselben Lauf', () => {
+  const { k, rufe, anmelden } = aufbau();
+  const s = anmelden('lager1', 'Passwort-Lager1');
+  rufe('retoure', { schluessel: s, query: { nr: '241900' } });
+  const a = rufe('anlegen', { schluessel: s, body: { entscheidungen: [
+    { positionId: '5101', zustand: 'Kein ZW' }, { positionId: '5102', zustand: 'Gut', grund: 'Kratzer an der Seite' },
+  ] } });
+  const neu = zwNachMailversand(a, [{ error: 'Authentication failed' }], k.speicher, k.jetzt);
+  assert.equal(k.speicher.ausgang, undefined);
+  assert.deepEqual(neu.schreiben.map((x) => [x.nr, x.lauf, x.aktion, JSON.parse(x.body).text]), [
+    [1, a.schreiben[0].lauf, 'anlegen', 'Kein ZW (5101)'],
+    [2, a.schreiben[0].lauf, 'freigabe-mail', 'ZW-Fehler (5102): Freigabe-Mail nicht gesendet'],
+  ]);
+  // Ohne Mailfehler bleiben die Zeilen erhalten
+  const ok = zwNachMailversand(a, [{ accepted: ['x'] }], k.speicher, k.jetzt);
+  assert.equal(ok.schreiben.length, 1);
+});
+
+test('TMP-Tabelle: Ergebnis landet im Protokoll und als Hinweis in der Antwort', () => {
+  const { k, rufe, anmelden, link } = aufbau();
+  const s = anmelden('lager1', 'Passwort-Lager1');
+  rufe('retoure', { schluessel: s, query: { nr: '241881' } });
+  const a = rufe('anlegen', { schluessel: s, body: { entscheidungen: [{ positionId: '5001', zustand: 'Kein ZW' }] } });
+  const n = a.schreiben.length;
+
+  const json = zwNachTmp(a, a.schreiben.map((_, i) => ({ id: i + 1 })), k.speicher, k.jetzt);
+  assert.deepEqual(Object.keys(json), ['status', 'contentType', 'body']);
+  assert.deepEqual(JSON.parse(json.body).tmp, { lauf: a.schreiben[0].lauf, zeilen: n, fehler: null });
+  const p = k.speicher.protokoll[k.speicher.protokoll.length - 1];
+  assert.equal(p.aktion, 'tmp-tabelle'); assert.equal(p.ergebnis, 'geschrieben'); assert.equal(p.retoureId, '241881');
+
+  const fehler = zwNachTmp(a, [{ error: { message: 'Data table ZW_TMP not found' } }], k.speicher, k.jetzt);
+  assert.match(JSON.parse(fehler.body).tmp.fehler, /ZW_TMP not found/);
+  assert.equal(k.speicher.protokoll[k.speicher.protokoll.length - 1].ergebnis, 'fehler');
+  assert.match(JSON.parse(zwNachTmp(a, [], k.speicher, k.jetzt).body).tmp.fehler, /nur 0 von/);
+
+  rufe('retoure', { schluessel: s, query: { nr: '241900' } });
+  const c = rufe('anlegen', { schluessel: s, body: { entscheidungen: [{ positionId: '5102', zustand: 'Gut', grund: 'Kratzer an der Seite' }] } });
+  const f = rufe('freigabe-entscheiden', { body: Object.assign({}, link(c.mails[0]), { entscheidung: 'freigeben' }) });
+  const seite = zwNachTmp(f, f.schreiben.map(() => ({ id: 1 })), k.speicher, k.jetzt);
+  assert.match(seite.body, /\d+ Schreibbefehle in die Tabelle ZW_TMP geschrieben \(Lauf 20261007T100000-[0-9a-f]{6}\)\.<\/p><\/div><\/body>/);
+  assert.match(zwNachTmp(f, [{ error: 'kaputt' }], k.speicher, k.jetzt).body, /<div class="w">TMP-Tabelle ZW_TMP: nicht geschrieben \(kaputt\)\.<\/div>/);
 });

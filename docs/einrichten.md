@@ -25,6 +25,13 @@ Die Zugänge (Credentials) legt die IT an. Im Workflow sind diese eingetragen:
 
 Fehlt ein Zugang nach dem Import, im Baustein bei **Credential** auswählen.
 
+## 2b. TMP-Tabelle ZW_TMP
+
+Der Baustein **TMP-Tabelle schreiben** schreibt in die Data Table **ZW_TMP** im selben Projekt. Gibt es sie noch nicht,
+unter **Data tables** anlegen, mit diesen Spalten (Typ in Klammern):
+`lauf`, `nr` (Number), `zeit`, `aktion`, `retoureId`, `positionId`, `system`, `titel`, `method`, `endpoint`, `body`, `hinweis`, `platzhalter`, `status`.
+Alle ohne Angabe sind Text (String). Was in den Spalten steht: [tmp-tabelle.md](tmp-tabelle.md).
+
 ## 3. Veröffentlichen und Seite öffnen
 
 1. Oben rechts **Publish** (bzw. „Active“) einschalten.
@@ -82,6 +89,8 @@ Eine Retoure öffnen und pro Artikel einen Zustand wählen: Die Vorschau rechnet
   Erkannt am negativen Preis oder an „Rabatt“ im Namen. Die Seite nennt sie nur als „ausgeblendet“.
 - Die Vorschau zeigt, welche Sale-Kategorien und Sale-Tags der ZW-Artikel in Shopware nicht vom Original übernimmt.
 - Nachgestellt: neue Varianten-ID (`SIM-1`, `SIM-2` …), Bestand +1, Kommentar in der Retoure, Status 9.3. In plenty und Shopware ändert sich nichts.
+- **TMP-Tabelle:** Alles, was im Echtbetrieb geschrieben würde, steht als Zeile in der Data Table ZW_TMP (ein Befehl pro Zeile).
+  Die Freigabe-Seite nennt nach dem Freigeben die Anzahl der Zeilen. Das Protokoll in der ZW-Liste zeigt jeden Lauf („tmp-tabelle“).
 - Tab **ZW-Liste** (ersetzt die Excel-Liste): alle freigegebenen ZW-Artikel, Knopf **Bestand gebucht**, Suche, Filter, CSV-Export. Darunter das Protokoll.
 - Fehler (z. B. Original fehlt in Shopware, Artikel ohne EAN, Mail nicht gesendet) als Kommentar. Die Position kann neu angelegt werden.
 - Admins können den Probelauf im Tab ZW-Liste zurücksetzen.
