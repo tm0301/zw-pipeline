@@ -540,7 +540,6 @@ function vorschauPosition(speicher, positionId, zustand, e, quellen) {
   });
 }
 
-// Das Lager darf den Preis ändern. Die berechnete Empfehlung bleibt zum Vergleich erhalten.
 function preisGrenze(e) {
   const g = Number(e.preisAbweichungMax);
   return g > 0 ? g : PREIS_ABWEICHUNG_OHNE_GRUND;
@@ -551,6 +550,7 @@ function preisBrauchtGrund(preis, empfehlung, e) {
   return Math.abs(preis - empfehlung) > preisGrenze(e) + 0.001;
 }
 
+// Das Lager darf den Preis ändern. Die berechnete Empfehlung bleibt zum Vergleich erhalten.
 function preisSetzen(v, preis) {
   if (preis === null || preis === undefined) return v;
   v.preis = preis;
