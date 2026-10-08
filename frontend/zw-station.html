@@ -309,12 +309,14 @@ details.panel > summary { cursor: pointer; padding: 12px 0; font-weight: 600; }
   var BILD_MAX_PX = 1600;
   var BILD_MAX_ZEICHEN = 2000000;
   var ABFRAGE_SEKUNDEN = 8;
+  // So weit darf das Lager vom Preisvorschlag abweichen. Mehr nur mit Begründung (prüft auch n8n).
+  var PREIS_ABWEICHUNG = 50;
 
   // Die Seite liegt unter …/zw-station, die Aktionen unter …/zw-station/<aktion>
   var BASIS = location.pathname.replace(/\/+$/, '') + '/';
   var $ = function (id) { return document.getElementById(id); };
   var eur = new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' });
-  var zustand = { schluessel: null, name: '', rolle: '', retoure: null, auswahl: {}, vorschau: {}, grund: {}, preis: {}, bilder: {}, bilderLaden: {}, abfrage: null, letzteAktivitaet: Date.now(), zwListe: [], zwFilter: 'offen', retouren: null, tab: 'ret' };
+  var zustand = { schluessel: null, name: '', rolle: '', retoure: null, auswahl: {}, vorschau: {}, grund: {}, preis: {}, preisGrund: {}, bilder: {}, bilderLaden: {}, abfrage: null, letzteAktivitaet: Date.now(), zwListe: [], zwFilter: 'offen', retouren: null, tab: 'ret' };
 
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
   function speichern(k, v) { try { if (v == null) sessionStorage.removeItem(k); else sessionStorage.setItem(k, v); } catch (e) {} }
@@ -515,7 +517,7 @@ details.panel > summary { cursor: pointer; padding: 12px 0; font-weight: 600; }
   function oeffneRetoure(nr) {
     fehler('list-error');
     api('retoure', { query: { nr: nr } }).then(function (d) {
-      zustand.auswahl = {}; zustand.vorschau = {}; zustand.grund = {}; zustand.preis = {}; zustand.bilder = {}; zustand.bilderLaden = {};
+      zustand.auswahl = {}; zustand.vorschau = {}; zustand.grund = {}; zustand.preis = {}; zustand.preisGrund = {}; zustand.bilder = {}; zustand.bilderLaden = {};
       zustand.retoure = d.retoure;
       $('search-input').value = '';
       zeige('ret');
@@ -535,7 +537,7 @@ details.panel > summary { cursor: pointer; padding: 12px 0; font-weight: 600; }
     $('plenty-notes').hidden = !notes.length;
     $('plenty-notes').innerHTML = notes.map(function (k) { return '<li>' + esc(k.text) + (k.zeit ? ' <small>' + esc(datum(k.zeit)) + '</small>' : '') + '</li>'; }).join('');
     // Beim Neuzeichnen das Feld behalten, in dem gerade getippt wird
-    var aktiv = document.activeElement, fokus = aktiv && aktiv.dataset ? (aktiv.dataset.grund ? 'grund' : (aktiv.dataset.preis ? 'preis' : null)) : null;
+    var aktiv = document.activeElement, fokus = aktiv && aktiv.dataset ? (aktiv.dataset.grund ? 'grund' : (aktiv.dataset.preis ? 'preis' : (aktiv.dataset.preisgrund ? 'preisgrund' : null))) : null;
     var fokusPos = fokus ? aktiv.dataset[fokus] : null, auswahlStart = fokus ? aktiv.selectionStart : null;
     $('pos-list').innerHTML = r.positionen.map(positionHtml).join('') + ((r.ausgeblendet || []).length
       ? '<p class="hint">Ausgeblendet, weil kein Artikel: ' + r.ausgeblendet.map(function (x) { return esc(x.name) + (x.preis != null ? ' (' + eur.format(x.preis) + ')' : ''); }).join(', ') + '</p>' : '');
@@ -592,9 +594,14 @@ details.panel > summary { cursor: pointer; padding: 12px 0; font-weight: 600; }
     if (v && v.artikel && !v.fehler) {
       var preis = zustand.preis[p.positionId];
       if (preis == null) preis = betrag(v.empfehlung);
-      h += '<label><span>Verkaufspreis in €</span><small>Empfehlung ' + eur.format(v.empfehlung) + '. Du darfst ihn ändern.</small>' +
+      var pg = zustand.preisGrund[p.positionId] || '', braucht = preisBrauchtGrund(p.positionId, v);
+      h += '<label><span>Verkaufspreis in €</span><small>Empfehlung ' + eur.format(v.empfehlung) + '. Du darfst ihn um bis zu ' + PREIS_ABWEICHUNG + ' € ändern, darüber nur mit Begründung.</small>' +
         '<input data-preis="' + esc(p.positionId) + '" inputmode="decimal" autocomplete="off" value="' + esc(preis) + '"' + (preisLesen(preis) === null ? ' class="fehlt"' : '') + '></label>' +
-        '<div class="preiswarn" data-warn="' + esc(p.positionId) + '">' + preisWarnHtml(p.positionId, v) + '</div>';
+        '<div class="preiswarn" data-warn="' + esc(p.positionId) + '">' + preisWarnHtml(p.positionId, v) + '</div>' +
+        '<label data-preisgrund-feld="' + esc(p.positionId) + '"' + (braucht ? '' : ' hidden') + '><span>Begründung für den Preis <span class="pflicht">*</span></span>' +
+        '<small>Der Preis weicht mehr als ' + PREIS_ABWEICHUNG + ' € von der Empfehlung ab. Steht so in der Freigabe-Mail.</small>' +
+        '<textarea data-preisgrund="' + esc(p.positionId) + '" maxlength="500" placeholder="z. B. Vergleichspreis bei Idealo, starke Gebrauchsspuren"' +
+        (!pg.trim() ? ' class="fehlt"' : '') + '>' + esc(pg) + '</textarea></label>';
     }
     if (wahl === 'Nicht verkaufbar') h += '<span class="hint">Das Büro bekommt eine Mail mit dem Grund. Sind alle Positionen entschieden, geht die Retoure auf 9.1.3 (Reklamieren).</span>';
     return h + '</div>';
@@ -666,6 +673,13 @@ details.panel > summary { cursor: pointer; padding: 12px 0; font-weight: 600; }
     return z >= 1 && z <= 100000 ? z : null;
   }
 
+  // Weicht der eingegebene Preis mehr als PREIS_ABWEICHUNG € von der Empfehlung ab?
+  function preisBrauchtGrund(pos, v) {
+    if (!v || !v.artikel || zustand.preis[pos] == null) return false;
+    var z = preisLesen(zustand.preis[pos]);
+    return z !== null && Math.abs(z - v.empfehlung) > PREIS_ABWEICHUNG + 0.001;
+  }
+
   function preisWarnHtml(pos, v) {
     var z = preisLesen(zustand.preis[pos] == null ? betrag(v.empfehlung) : zustand.preis[pos]);
     if (z === null) return '<span>Bitte einen gültigen Preis eingeben, z. B. 1299,99.</span>';
@@ -673,6 +687,7 @@ details.panel > summary { cursor: pointer; padding: 12px 0; font-weight: 600; }
     if (v.einkaufspreis != null && z < v.einkaufspreis) w.push('Liegt unter dem Einkaufspreis ' + eur.format(v.einkaufspreis) + '.');
     if (z >= v.streichpreis) w.push('Nicht günstiger als der Streichpreis ' + eur.format(v.streichpreis) + '.');
     if (z !== v.empfehlung) w.push('Abweichend von der Empfehlung ' + eur.format(v.empfehlung) + '. Das steht so in der Freigabe-Mail.');
+    if (preisBrauchtGrund(pos, v)) w.push('Mehr als ' + PREIS_ABWEICHUNG + ' € Abweichung: Bitte unten begründen.');
     return w.map(function (x) { return '<span>' + esc(x) + '</span>'; }).join('');
   }
 
@@ -687,6 +702,11 @@ details.panel > summary { cursor: pointer; padding: 12px 0; font-weight: 600; }
       t.classList.toggle('fehlt', preisLesen(t.value) === null);
       var v = zustand.vorschau[pos + '|' + zustand.auswahl[pos]], w = $('pos-list').querySelector('[data-warn="' + pos + '"]');
       if (v && w) w.innerHTML = preisWarnHtml(pos, v);
+      var feld = $('pos-list').querySelector('[data-preisgrund-feld="' + pos + '"]');
+      if (feld) feld.hidden = !preisBrauchtGrund(pos, v);
+    } else if (t.dataset.preisgrund) {
+      zustand.preisGrund[t.dataset.preisgrund] = t.value;
+      t.classList.toggle('fehlt', !t.value.trim());
     } else return;
     aktualisiereAnlegen();
   });
@@ -737,11 +757,15 @@ details.panel > summary { cursor: pointer; padding: 12px 0; font-weight: 600; }
       return zustand.preis[p.positionId] != null && preisLesen(zustand.preis[p.positionId]) === null;
     }).length;
     var bilderLaden = gewaehlt.filter(function (p) { return zustand.bilderLaden[p.positionId] > 0; }).length;
-    $('anlegen').disabled = gewaehlt.length === 0 || ohneGrund > 0 || falscherPreis > 0 || bilderLaden > 0;
+    var ohnePreisGrund = gewaehlt.filter(function (p) {
+      return preisBrauchtGrund(p.positionId, zustand.vorschau[p.positionId + '|' + zustand.auswahl[p.positionId]]) && !String(zustand.preisGrund[p.positionId] || '').trim();
+    }).length;
+    $('anlegen').disabled = gewaehlt.length === 0 || ohneGrund > 0 || falscherPreis > 0 || ohnePreisGrund > 0 || bilderLaden > 0;
     $('anlegen').textContent = gewaehlt.length > 1 ? gewaehlt.length + ' Positionen anlegen' : 'Anlegen';
     $('anlegen').hidden = !r.positionen.some(offen);
     $('anlegen-hint').textContent = !r.positionen.some(offen) ? 'Alle Positionen sind entschieden.'
       : [ohneGrund ? 'Bitte Grund eintragen (' + ohneGrund + ')' : '', bilderLaden ? 'Bilder werden vorbereitet' : '', falscherPreis ? 'Preis prüfen (' + falscherPreis + ')' : '',
+        ohnePreisGrund ? 'Preis begründen (' + ohnePreisGrund + ')' : '',
         nochOffen ? nochOffen + ' Position(en) ohne Zustand' : ''].filter(Boolean).join(' · ');
   }
 
@@ -754,6 +778,7 @@ details.panel > summary { cursor: pointer; padding: 12px 0; font-weight: 600; }
         var preis = zustand.preis[p.positionId];
         return { positionId: p.positionId, zustand: z, grund: String(zustand.grund[p.positionId] || '').trim(),
           preis: v && v.artikel && preis != null ? preis : undefined,
+          preisGrund: preisBrauchtGrund(p.positionId, v) ? String(zustand.preisGrund[p.positionId] || '').trim() : undefined,
           bilder: (z === 'Kein ZW' ? [] : zustand.bilder[p.positionId] || []).map(function (b) { return { name: b.name, daten: b.daten }; }) };
       });
     if (!liste.length) return;
@@ -761,7 +786,7 @@ details.panel > summary { cursor: pointer; padding: 12px 0; font-weight: 600; }
     $('anlegen').disabled = true;
     $('anlegen').textContent = 'Wird angelegt …';
     api('anlegen', { body: { retoureId: r.id, entscheidungen: liste } }).then(function (d) {
-      liste.forEach(function (x) { delete zustand.auswahl[x.positionId]; delete zustand.grund[x.positionId]; delete zustand.preis[x.positionId]; delete zustand.bilder[x.positionId]; });
+      liste.forEach(function (x) { delete zustand.auswahl[x.positionId]; delete zustand.grund[x.positionId]; delete zustand.preis[x.positionId]; delete zustand.preisGrund[x.positionId]; delete zustand.bilder[x.positionId]; });
       // Ergebnis direkt übernehmen: n8n speichert den Stand erst kurz nach der Antwort,
       // ein sofortiges Neuladen könnte noch den alten Stand liefern.
       d.ergebnisse.forEach(function (e) {
@@ -832,7 +857,7 @@ details.panel > summary { cursor: pointer; padding: 12px 0; font-weight: 600; }
         ? '<span class="gebucht">✓ gebucht</span> <small>' + esc(z.gebuchtVon || '') + ' ' + esc(datum(z.gebuchtAm)) + '</small> <button type="button" class="linkbtn" data-id="' + esc(z.id) + '" data-g="0">zurücknehmen</button>'
         : '<button type="button" class="btn small" data-id="' + esc(z.id) + '" data-g="1">Bestand gebucht</button>';
       return '<tr><td>' + esc(datum(z.datum)) + '</td><td class="code">' + esc(z.retoureId) + '</td><td class="code">' + esc(z.zwVarianteId) + '</td><td class="code">' + esc(z.barcode) +
-        '</td><td>' + esc(z.name) + '</td><td>' + esc(z.zustand) + '</td><td>' + esc(z.grund || '') + '</td><td>' + eur.format(z.preis) + (z.preisVomLager ? ' <small>(Lager)</small>' : '') +
+        '</td><td>' + esc(z.name) + '</td><td>' + esc(z.zustand) + '</td><td>' + esc(z.grund || '') + '</td><td>' + eur.format(z.preis) + (z.preisVomLager ? ' <small>(Lager' + (z.preisGrund ? ': ' + esc(z.preisGrund) : '') + ')</small>' : '') +
         '</td><td>' + eur.format(z.streichpreis) + '</td><td>' + esc(z.neuOderPlus1) + '</td><td>' + bestand + '</td></tr>';
     }).join('') || '<tr><td colspan="11">' + (zustand.zwListe.length ? 'Keine Einträge für diesen Filter.' : 'Noch keine Einträge.') + '</td></tr>';
   }
@@ -851,7 +876,7 @@ details.panel > summary { cursor: pointer; padding: 12px 0; font-weight: 600; }
 
   $('zw-csv').addEventListener('click', function () {
     var spalten = [['datum', 'Datum'], ['retoureId', 'Retoure'], ['originalVarianteId', 'Original-Variante'], ['zwVarianteId', 'ZW-Variante'], ['barcode', 'Barcode'],
-      ['name', 'Name'], ['zustand', 'Zustand'], ['grund', 'Grund'], ['preis', 'Preis'], ['empfehlung', 'Empfehlung'], ['preisVomLager', 'Preis vom Lager'], ['streichpreis', 'Streichpreis'], ['neuOderPlus1', 'neu/+1'], ['freigegebenVon', 'Freigegeben von'],
+      ['name', 'Name'], ['zustand', 'Zustand'], ['grund', 'Grund'], ['preis', 'Preis'], ['empfehlung', 'Empfehlung'], ['preisVomLager', 'Preis vom Lager'], ['preisGrund', 'Begründung Preis'], ['streichpreis', 'Streichpreis'], ['neuOderPlus1', 'neu/+1'], ['freigegebenVon', 'Freigegeben von'],
       ['bestandGebucht', 'Bestand gebucht'], ['gebuchtVon', 'Gebucht von'], ['gebuchtAm', 'Gebucht am']];
     function zelle(v) {
       if (typeof v === 'number') v = String(v).replace('.', ',');

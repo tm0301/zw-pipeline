@@ -554,8 +554,16 @@ test('Lager ändert den Preis: Empfehlung bleibt sichtbar, Warnungen neu berechn
   assert.equal(v.einkaufspreis, 644.11);
   assert.deepEqual(v.nichtUebernehmen, ['Kategorie Summer Sale', 'Tag flash sale']);
 
-  const a = rufe('anlegen', { schluessel: s, body: { entscheidungen: [{ positionId: '5001', zustand: 'Gut', grund: 'Kratzer', preis: '599,00' }] } });
+  // Mehr als 50 € unter der Empfehlung: ohne Begründung wird nichts angelegt
+  const ohne = rufe('anlegen', { schluessel: s, body: { entscheidungen: [{ positionId: '5001', zustand: 'Gut', grund: 'Kratzer', preis: '599,00' }] } });
+  assert.equal(ohne.status, 400);
+  assert.match(ohne.daten.fehler, /mehr als 50 € von der Empfehlung 777,99 € ab/);
+  assert.equal(rufe('retoure', { schluessel: s, query: { nr: '241881' } }).daten.retoure.positionen[0].status, 'offen');
+
+  const a = rufe('anlegen', { schluessel: s, body: { entscheidungen: [{ positionId: '5001', zustand: 'Gut', grund: 'Kratzer', preis: '599,00', preisGrund: 'Starke Gebrauchsspuren' }] } });
   const st = a.daten.ergebnisse[0];
+  assert.equal(st.vorschau.preisGrund, 'Starke Gebrauchsspuren');
+  assert.match(a.mails[0].html, /Begründung Preis.*Starke Gebrauchsspuren/);
   assert.equal(st.vorschau.preis, 599);
   assert.equal(st.vorschau.empfehlung, 777.99);
   assert.equal(st.vorschau.preisVomLager, true);
@@ -564,7 +572,26 @@ test('Lager ändert den Preis: Empfehlung bleibt sichtbar, Warnungen neu berechn
   assert.match(a.mails[0].html, /Nicht übernehmen.*Summer Sale/);
   rufe('freigabe-entscheiden', { body: Object.assign({}, link(a.mails[0]), { entscheidung: 'freigeben' }) });
   const z = rufe('zw-liste', { schluessel: s }).daten.zwListe[0];
-  assert.deepEqual([z.preis, z.empfehlung, z.preisVomLager], [599, 777.99, true]);
+  assert.deepEqual([z.preis, z.empfehlung, z.preisVomLager, z.preisGrund], [599, 777.99, true, 'Starke Gebrauchsspuren']);
+});
+
+test('Preis bis 50 € um die Empfehlung ohne Begründung, die Grenze ist einstellbar', () => {
+  const { rufe, anmelden } = aufbau();
+  const s = anmelden('lager1', 'Passwort-Lager1');
+  rufe('retoure', { schluessel: s, query: { nr: '241881' } });
+  // Empfehlung bei Gut: 777,99 €. 827,99 € sind genau 50 € mehr: erlaubt.
+  const a = rufe('anlegen', { schluessel: s, body: { entscheidungen: [{ positionId: '5001', zustand: 'Gut', grund: 'Kratzer', preis: '827,99' }] } });
+  assert.equal(a.status, 200);
+  assert.equal(a.daten.ergebnisse[0].vorschau.preisGrund, '');
+  assert.doesNotMatch(a.mails[0].html, /Begründung Preis/);
+
+  const b = aufbau();
+  b.k.einstellungen.preisAbweichungMax = 20;
+  const s2 = b.anmelden('lager1', 'Passwort-Lager1');
+  b.rufe('retoure', { schluessel: s2, query: { nr: '241881' } });
+  const r = b.rufe('anlegen', { schluessel: s2, body: { entscheidungen: [{ positionId: '5001', zustand: 'Gut', grund: 'Kratzer', preis: '750,00' }] } });
+  assert.equal(r.status, 400);
+  assert.match(r.daten.fehler, /mehr als 20 €/);
 });
 
 test('ungültiger Preis vom Lager wird abgewiesen, gleicher Preis zählt als Empfehlung', () => {

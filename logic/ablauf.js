@@ -36,6 +36,9 @@ const BILD_MAX_ZEICHEN = 2500000;
 const BILD_TYPEN = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
 // Trockenlauf: so viele Schreibpläne bleiben gespeichert (die ältesten fallen weg)
 const MAX_SCHREIBPLAENE = 50;
+// So weit darf das Lager vom Preisvorschlag abweichen, ohne den Preis zu begründen (entschieden 08.10.2026).
+// Überschreibbar mit einstellungen.preisAbweichungMax.
+const PREIS_ABWEICHUNG_OHNE_GRUND = 50;
 
 // ---------- Einstieg ----------
 
@@ -538,6 +541,16 @@ function vorschauPosition(speicher, positionId, zustand, e, quellen) {
 }
 
 // Das Lager darf den Preis ändern. Die berechnete Empfehlung bleibt zum Vergleich erhalten.
+function preisGrenze(e) {
+  const g = Number(e.preisAbweichungMax);
+  return g > 0 ? g : PREIS_ABWEICHUNG_OHNE_GRUND;
+}
+
+// Mehr als die erlaubte Abweichung vom Vorschlag? Dann braucht der Preis eine Begründung.
+function preisBrauchtGrund(preis, empfehlung, e) {
+  return Math.abs(preis - empfehlung) > preisGrenze(e) + 0.001;
+}
+
 function preisSetzen(v, preis) {
   if (preis === null || preis === undefined) return v;
   v.preis = preis;
@@ -555,6 +568,7 @@ function entscheidungenLesen(body) {
     zustand: String(x.zustand || ''),
     grund: String(x.grund || '').replace(/\s+/g, ' ').trim().slice(0, ZW_GRUND_MAX),
     preis: x.preis,
+    preisGrund: String(x.preisGrund || '').replace(/\s+/g, ' ').trim().slice(0, ZW_GRUND_MAX),
     bilder: bilderLesen(x.bilder, String(x.positionId || '')),
   }));
 }
@@ -605,6 +619,12 @@ function anlegen(speicher, body, e, person, jetzt, url, quellen) {
     } catch (err) {
       abbrechen(400, 'Position ' + x.positionId + ': ' + err.message);
     }
+    if (x.lagerPreis !== null && !x.preisGrund) {
+      const v = vorschauPosition(speicher, x.positionId, x.zustand, e, quellen);
+      if (v.artikel && !v.fehler && preisBrauchtGrund(x.lagerPreis, v.empfehlung, e)) {
+        abbrechen(400, 'Position ' + x.positionId + ': Der Preis weicht mehr als ' + preisGrenze(e) + ' € von der Empfehlung ' + euro(v.empfehlung) + ' ab. Bitte begründen.');
+      }
+    }
   }
 
   for (const x of liste) {
@@ -643,6 +663,7 @@ function anlegen(speicher, body, e, person, jetzt, url, quellen) {
     v.grund = x.grund;
     v.bilder = x.bilder.length;
     preisSetzen(v, x.lagerPreis);
+    v.preisGrund = v.preisVomLager ? x.preisGrund : '';
     const versuch = (bisher.versuch || 0) + 1;
     schreibplanMerken(speicher, x.positionId, versuch, zwSchreibplan(v, {
       plenty: (quellen.originale || {})[v.originalVarianteId] || null,
@@ -718,6 +739,7 @@ function vorschauZeilen(speicher, v) {
     ['Bilder', bilderZeile(v.bilder || 0)],
     ['Barcode', v.barcode],
     ['Preis', euro(v.preis) + (v.preisVomLager ? ' (vom Lager geändert, Empfehlung ' + euro(v.empfehlung) + ')' : ' (Empfehlung)') + ', Streichpreis ' + euro(v.streichpreis)],
+    ...(v.preisGrund ? [['Begründung Preis', v.preisGrund]] : []),
     ['Preisregel', v.fall === 'normal' ? 'Mindestpreis ' + euro(v.mindestpreis) + ' − ' + v.abschlag + ' %' : (v.fall === 'a' ? 'Mindestpreis erreicht' : 'Mindestpreis leer') + ': jetziger Preis − ' + v.abschlag + ' %'],
     ['Ergebnis', v.neu ? 'Neuer ZW-Artikel' : 'Bestand +1 auf ' + v.bestehendeVarianteId + (v.bestehendSimuliert ? ' (Probelauf)' : '')],
   ];
@@ -829,7 +851,7 @@ function freigabeEntscheiden(body, e, speicher, jetzt) {
   speicher.zwListe.push({
     id: 'Z' + (sim.naechsteZeile++), datum: zeit.slice(0, 10), retoureId, originalVarianteId: v.originalVarianteId,
     zwVarianteId: varianteId, barcode: v.barcode, name: v.name, zustand: v.zustand, grund: v.grund || '', bilder: v.bilder || 0,
-    preis: v.preis, empfehlung: v.empfehlung, preisVomLager: !!v.preisVomLager, streichpreis: v.streichpreis,
+    preis: v.preis, empfehlung: v.empfehlung, preisVomLager: !!v.preisVomLager, preisGrund: v.preisGrund || '', streichpreis: v.streichpreis,
     neuOderPlus1: plus1 ? '+1' : 'neu', freigegebenVon: von, probelauf: true, bestandGebucht: false, gebuchtVon: null, gebuchtAm: null,
   });
   speicher.positionen[f.positionId] = Object.assign({}, f.st, {
