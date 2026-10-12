@@ -89,6 +89,12 @@ const codeRundeB = mitKopf(nurNoetig(['zwRundeB']) + '\n' +
   'const plan = $(\'Vorbereiten\').first().json.plan;\n' +
   'return [{ json: { plenty: zwRundeB(plan, $input.all().map((i) => i.json)) } }];\n');
 
+// Alle Code-Bausteine außer ZW-Logik selbst. Ihre Prüfsummen liefert …/webhook/zw-station?pruefen=version.
+const CODE_BAUSTEINE = [
+  'Vorbereiten', 'Runde B planen', 'Freigabe-Mails aufteilen', 'Mailergebnis', 'Schreibbefehle aufteilen', 'TMP-Ergebnis',
+  'Ablage', 'Protokoll aufteilen', 'ZW-Liste aufteilen',
+];
+
 const codeLogik = mitKopf(
   '// Die Seite der ZW-Station als Rohtext (Quelle: frontend/zw-station.html)\n' +
   'const SEITE_HTML = String.raw`' + seite + '`;\n\n' +
@@ -109,6 +115,9 @@ const codeLogik = mitKopf(
   '  einstellungen: anfrage.einstellungen || {}, speicher: $getWorkflowStaticData(\'global\'), jetzt: Date.now(),\n' +
   '  seiteHtml: SEITE_HTML, daten: geholteDaten(),\n' +
   '  eigenerCode: () => { try { return $(\'ZW-Logik\').params.jsCode; } catch (err) { return null; } },\n' +
+  '  alleCodes: () => Object.fromEntries([' + CODE_BAUSTEINE.map((n) => '\'' + n + '\'').join(', ') + '].map((n) => {\n' +
+  '    try { return [n, $(n).params.jsCode]; } catch (err) { return [n, null]; }\n' +
+  '  })),\n' +
   '});\n' +
   'return [{ json: antwort }];\n');
 

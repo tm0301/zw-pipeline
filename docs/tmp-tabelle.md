@@ -21,7 +21,8 @@ Workflow: „ZW-Pipeline (Probelauf)“, ID `CnWHdgolMCRgbxnc`. Seite: `https://
 2. **Zugänge zum Schreiben** als Credentials anlegen. Die vorhandenen können nur lesen.
    - plenty: Artikel, Varianten, Barcodes, Texte, Verkaufspreise, Lieferanten, Lager, Kategorien, Tags, Versandprofile, Eigenschaften, Kommentare, Auftragsstatus.
    - Shopware: Produkte klonen und ändern, Medien anlegen, hochladen und löschen.
-3. **Shopware-Medienordner „ZW-Retouren“** anlegen und seine ID in **Einstellungen → `shopwareBilderOrdner`** eintragen.
+3. **Shopware-Medienordner „ZW-Retouren“** anlegen. Im Baustein **Einstellungen** ein Feld `einstellungen.shopwareBilderOrdner`
+   (Typ String) ergänzen und die Ordner-ID eintragen. Im Live-Workflow fehlt das Feld noch, leer bzw. fehlend ergibt den Platzhalter ‹Ordner ZW-Retouren›.
 4. **„TMP-Tabelle schreiben“ ersetzen** durch die Schreib-Bausteine:
    - Pro `lauf` die Zeilen in der Reihenfolge `nr` ausführen. Zeilen mit `system = info` überspringen.
    - Platzhalter (Spalte `platzhalter`) vorher ersetzen, siehe unten.

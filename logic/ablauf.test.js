@@ -173,6 +173,16 @@ function aufbau() {
 
 // ---------- Anmeldung ----------
 
+test('Prüfsummen: ZW-Logik und alle anderen Code-Bausteine', () => {
+  const { k, rufe } = aufbau();
+  const sha = (t) => crypto.createHash('sha256').update(t, 'utf8').digest('hex');
+  k.eigenerCode = () => 'const ä = 1;';
+  k.alleCodes = () => ({ 'Vorbereiten': 'return [];', 'Ablage': null });
+  const d = rufe('', { query: { pruefen: 'version' } }).daten;
+  assert.equal(d.codeSha256, sha('const ä = 1;'));
+  assert.deepEqual(d.bausteine, { 'Vorbereiten': sha('return [];'), 'Ablage': null });
+});
+
 test('Seite wird ohne Anmeldung ausgeliefert', () => {
   const { rufe } = aufbau();
   const r = rufe('');

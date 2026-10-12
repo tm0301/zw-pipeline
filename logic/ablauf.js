@@ -165,8 +165,12 @@ function zwAktion(anfrage, k) {
     case 'zw-station':
       if (q.pruefen === 'version') {
         // Prüfsumme des Codes, der in n8n tatsächlich steht. Damit lässt sich ein Update überprüfen.
+        // bausteine: dasselbe für alle Code-Bausteine (Name → SHA-256), zum Vergleich mit n8n/zw-pipeline-probelauf.json.
         const quelle = typeof k.eigenerCode === 'function' ? k.eigenerCode() : null;
-        return json(200, { ok: true, codeSha256: quelle ? bytesZuHex(sha256(utf8(quelle))) : null });
+        const codes = typeof k.alleCodes === 'function' ? k.alleCodes() : {};
+        const bausteine = {};
+        for (const name of Object.keys(codes || {})) bausteine[name] = codes[name] ? bytesZuHex(sha256(utf8(codes[name]))) : null;
+        return json(200, { ok: true, codeSha256: quelle ? bytesZuHex(sha256(utf8(quelle))) : null, bausteine });
       }
       return { status: 200, contentType: 'text/html; charset=utf-8', body: k.seiteHtml };
     case 'anmelden':
