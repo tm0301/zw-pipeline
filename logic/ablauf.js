@@ -5,13 +5,16 @@
 // TMP-Tabelle: Alles, was im Echtbetrieb in plenty oder Shopware geschrieben würde (Kopie, Klon, +1, Kommentare, Status),
 // hängt als „schreiben“ an der Antwort. n8n schreibt es in die Data Table ZW_TMP. Die IT ersetzt diesen Baustein
 // später durch die echten Schreib-Bausteine.
-// Der Zustand (Protokoll, offene Freigaben, ZW-Liste, Zwischenspeicher) liegt im Speicher des Workflows.
+// Protokoll und ZW-Liste liegen in den Data Tables ZW_PROTOKOLL und ZW_LISTE. Neue Zeilen hängen als „ablage“ an der Antwort,
+// n8n schreibt sie am Ende. Gelesen werden sie nur für die ZW-Liste (Bausteine „ZW-Liste lesen“ und „Protokoll lesen“).
+// Der übrige Zustand (offene Freigaben, Positionen, Zwischenspeicher) liegt im Speicher des Workflows.
 // Beim Bauen des n8n-Workflows wird alles zwischen NUR-NODE-ANFANG und NUR-NODE-ENDE entfernt.
 //
 // Ablauf in n8n pro Anfrage:
 //   Webhook → Einstellungen → Vorbereiten (zwVorbereiten) → [plenty Runde A → Runde B planen (zwRundeB)
-//   → plenty Runde B → Shopware] → ZW-Logik (zwVerarbeiten) → [Mails] → [TMP-Tabelle (zwNachTmp)] → Antwort
-// Die eckigen Klammern laufen nur, wenn Daten gebraucht werden.
+//   → plenty Runde B → Shopware | ZW-Liste lesen → Protokoll lesen] → ZW-Logik (zwVerarbeiten) → [Mails]
+//   → [TMP-Tabelle (zwNachTmp)] → Ablage → [Protokoll schreiben] → [ZW-Liste schreiben] → Antwort
+// Die eckigen Klammern laufen nur, wenn sie gebraucht werden.
 
 // NUR-NODE-ANFANG
 const {
@@ -23,7 +26,10 @@ const {
   LEER_PLENTY, LEER_SHOPWARE, retourenNummer, anfrageRetourenListe, anfrageRetoure, anfrageVarianten, anfrageBarcode, shopwareSuche,
   anfrageOriginale, anfrageArtikel, artikelIdsAus, plentyFehler, eintraege, artikelPositionen, rabattPositionen, shopAuftrag, eanAusVariante, textOhneHtml, shopwareNachNummer,
 } = require('./quellen.js');
-const { zwSchreibplan, retoureBefehle, kommentarBefehl, statusBefehl, infoZeile, tmpZeile, schreibplanHtml, NEU_VARIANTE } = require('./schreibplan.js');
+const {
+  zwSchreibplan, retoureBefehle, kommentarBefehl, statusBefehl, infoZeile, tmpZeile, schreibplanHtml, NEU_VARIANTE,
+  bilderHochladenBefehle, bilderLoeschenBefehle, zwListeBefehl,
+} = require('./schreibplan.js');
 // NUR-NODE-ENDE
 
 const ERLEDIGT = ['angelegt', 'plus1', 'nicht_verkaufbar', 'kein_zw'];
@@ -33,6 +39,10 @@ const MAX_ZWISCHENSPEICHER_RETOUREN = 300;
 // Fertige Retouren stehen so lange im Ordner „Fertig“, danach räumt die Station sie weg.
 const FERTIG_TAGE = 7;
 const DATEN_AKTIONEN = ['retouren', 'retoure', 'vorschau', 'anlegen'];
+// Diese Aktionen lesen die Data Tables ZW_LISTE (neueste 300 Zeilen) und ZW_PROTOKOLL (neueste 50)
+const TABELLEN_AKTIONEN = ['zw-liste', 'zw-liste-buchen'];
+const ZW_LISTE_MAX = 300;
+const PROTOKOLL_MAX = 50;
 // Bilder zum Grund: höchstens 3 pro Position. Die Seite verkleinert sie vorher (JPEG, etwa 300 KB).
 const BILDER_MAX = 3;
 const BILD_MAX_ZEICHEN = 2500000;
@@ -65,7 +75,8 @@ function zwVorbereiten(anfrage, k) {
     speicherVorbereiten(speicher);
     const e = k.einstellungen || {};
     const route = zwRoute(anfrage);
-    if (!DATEN_AKTIONEN.includes(route.aktion)) return { weiter: 'logik' };
+    const tabellen = TABELLEN_AKTIONEN.includes(route.aktion);
+    if (!DATEN_AKTIONEN.includes(route.aktion) && !tabellen) return { weiter: 'logik' };
     if (!route.testlauf) {
       // Ohne gültige Anmeldung keine Abfragen an plenty und Shopware. Die Ablehnung schreibt die ZW-Logik.
       const g = String(e.geheimSchluessel || '').trim().length >= 32 ? String(e.geheimSchluessel).trim() : speicher.geheimnis;
@@ -75,6 +86,7 @@ function zwVorbereiten(anfrage, k) {
     const q = anfrage.query || {};
     const body = anfrage.body || {};
 
+    if (tabellen) return { weiter: 'tabellen', plan: { art: 'tabellen' } };
     if (route.aktion === 'retouren') {
       return { weiter: 'daten', plan: { art: 'retouren' }, plenty: anfrageRetourenListe(e), shopware: LEER_SHOPWARE };
     }
@@ -135,7 +147,7 @@ function zwVerarbeiten(anfrage, k) {
     if (e && e.zwAntwort) antwort = e.zwAntwort;
     else antwort = json(500, { ok: false, fehler: 'Interner Fehler: ' + (e && e.message ? e.message : String(e)) });
   }
-  return schreibenAnhaengen(antwort, k.speicher, k.jetzt);
+  return ausgabeAnhaengen(antwort, k.speicher, k.jetzt);
 }
 
 function zwAktion(anfrage, k) {
@@ -143,6 +155,8 @@ function zwAktion(anfrage, k) {
   speicherVorbereiten(speicher);
   const e = Object.assign({}, k.einstellungen || {}, { geheimSchluessel: geheimSchluesselBestimmen(k.einstellungen || {}, speicher, k.zufall) });
   const route = zwRoute(anfrage);
+  // Testläufe in n8n speichern den Speicher nicht. Der Umzug läuft deshalb nur bei echten Aufrufen, sonst käme er doppelt.
+  const umgezogen = route.testlauf ? [] : altesUmziehen(speicher);
   const aktion = route.aktion;
   const q = anfrage.query || {};
   const body = anfrage.body || {};
@@ -178,13 +192,16 @@ function zwAktion(anfrage, k) {
       return json(200, { ok: true, vorschau: vorschauListe(speicher, body, e, quellenFuerVorschau(k)) });
     case 'anlegen':
       return anlegen(speicher, body, e, person, k.jetzt, anfrage.url, quellenFuerVorschau(k));
-    case 'zw-liste':
-      return json(200, { ok: true, zwListe: speicher.zwListe.slice(-300).reverse(), protokoll: speicher.protokoll.slice(-50).reverse() });
+    case 'zw-liste': {
+      const t = tabellenDaten(k, umgezogen);
+      return json(200, { ok: true, zwListe: t.zwListe, protokoll: t.protokoll });
+    }
     case 'zw-liste-buchen':
-      return zwListeBuchen(speicher, body, person, k.jetzt);
+      return zwListeBuchen(speicher, tabellenDaten(k, umgezogen).zwListe, body, person, k.jetzt);
     case 'zuruecksetzen':
+      // Setzt nur den Speicher des Workflows zurück. Die Data Tables ZW_LISTE und ZW_PROTOKOLL bleiben, wie sie sind.
       if (person.rolle !== 'admin') return json(403, { ok: false, fehler: 'Nur für Admins.' });
-      for (const s of Object.keys(speicher)) if (s !== 'fehlversuche' && s !== 'geheimnis') delete speicher[s];
+      for (const s of Object.keys(speicher)) if (s !== 'fehlversuche' && s !== 'geheimnis' && s !== 'ablageAusgang') delete speicher[s];
       speicherVorbereiten(speicher);
       return json(200, { ok: true });
   }
@@ -231,13 +248,11 @@ function esc(s) {
 
 function speicherVorbereiten(speicher) {
   if (!speicher.positionen) speicher.positionen = {};
-  if (!speicher.protokoll) speicher.protokoll = [];
-  if (!speicher.zwListe) speicher.zwListe = [];
   if (!speicher.fehlversuche) speicher.fehlversuche = {};
   if (!speicher.cache) speicher.cache = { positionen: {}, retouren: {}, reihenfolge: [] };
   if (!speicher.kommentare) speicher.kommentare = {};
   if (!speicher.retourenFertig) speicher.retourenFertig = {};
-  if (!speicher.sim) speicher.sim = { naechsteNr: 1, zwArtikel: {}, naechsteZeile: 1 };
+  if (!speicher.sim) speicher.sim = { naechsteNr: 1, zwArtikel: {} };
 }
 
 // Geheimschlüssel: aus „Einstellungen“, falls dort gesetzt. Sonst einmalig zufällig erzeugen
@@ -293,9 +308,86 @@ function benutzerListe(e) {
   return liste.map((b) => Object.assign({}, b, { benutzer: String(b.benutzer).trim(), hash: String(b.hash).trim() }));
 }
 
+// ---------- Protokoll und ZW-Liste (Data Tables) ----------
+// Neue Zeilen sammeln sich während einer Anfrage in speicher.ablageAusgang und hängen am Ende als „ablage“ an der Antwort.
+// n8n schreibt sie in ZW_PROTOKOLL (neue Zeile) bzw. ZW_LISTE (neu oder ändern, Schlüssel zeileId).
+
+const PROTOKOLL_SPALTEN = ['zeit', 'benutzer', 'aktion', 'retoureId', 'positionId', 'zustand', 'preis', 'varianteId', 'ergebnis', 'meldung'];
+const ZW_LISTE_SPALTEN = [
+  'zeileId', 'datum', 'retoureId', 'positionId', 'originalVarianteId', 'zwVarianteId', 'barcode', 'name', 'zustand', 'grund', 'bilder',
+  'preis', 'empfehlung', 'preisVomLager', 'preisGrund', 'streichpreis', 'neuOderPlus1', 'freigegebenVon', 'probelauf',
+  'bestandGebucht', 'gebuchtVon', 'gebuchtAm', 'lauf',
+];
+const ZAHL_SPALTEN = ['preis', 'empfehlung', 'streichpreis', 'bilder'];
+const JA_NEIN_SPALTEN = ['preisVomLager', 'probelauf', 'bestandGebucht'];
+
+// Eine Zeile mit genau den Spalten der Tabelle: Texte nie leer (''), Zahlen oder null, Ja/Nein als true/false
+function tabellenZeile(spalten, x) {
+  const z = {};
+  for (const s of spalten) {
+    const w = x[s];
+    if (ZAHL_SPALTEN.includes(s)) z[s] = typeof w === 'number' && Number.isFinite(w) ? w : (w === null || w === undefined || w === '' || !Number.isFinite(Number(w)) ? null : Number(w));
+    else if (JA_NEIN_SPALTEN.includes(s)) z[s] = w === true || w === 'true';
+    else z[s] = w === null || w === undefined ? '' : String(w);
+  }
+  return z;
+}
+
+function ablageMerken(speicher, tabelle, zeile) {
+  if (!speicher.ablageAusgang) speicher.ablageAusgang = { protokoll: [], zwListe: [] };
+  speicher.ablageAusgang[tabelle].push(zeile);
+}
+
 function protokollieren(speicher, jetzt, eintrag) {
-  speicher.protokoll.push(Object.assign({ zeit: new Date(jetzt).toISOString() }, eintrag));
-  if (speicher.protokoll.length > 1000) speicher.protokoll.splice(0, speicher.protokoll.length - 1000);
+  ablageMerken(speicher, 'protokoll', tabellenZeile(PROTOKOLL_SPALTEN, Object.assign({ zeit: new Date(jetzt).toISOString() }, eintrag)));
+}
+
+function zwListeMerken(speicher, zeile) {
+  ablageMerken(speicher, 'zwListe', tabellenZeile(ZW_LISTE_SPALTEN, zeile));
+}
+
+// Für die Seite: zeileId heißt dort id
+function zwListeFuerSeite(z) {
+  const aus = tabellenZeile(ZW_LISTE_SPALTEN, z);
+  aus.id = aus.zeileId;
+  delete aus.zeileId;
+  return aus;
+}
+
+// Einmaliger Umzug: Protokoll und ZW-Liste aus dem Speicher des Workflows (Stand bis 12.10.2026) in die Data Tables.
+// Liefert die umgezogenen ZW-Listen-Zeilen, damit sie im selben Aufruf schon sichtbar sind.
+function altesUmziehen(speicher) {
+  const umgezogen = [];
+  if (Array.isArray(speicher.protokoll)) {
+    for (const p of speicher.protokoll) ablageMerken(speicher, 'protokoll', tabellenZeile(PROTOKOLL_SPALTEN, p));
+    delete speicher.protokoll;
+  }
+  if (Array.isArray(speicher.zwListe)) {
+    for (const z of speicher.zwListe) {
+      const zeile = tabellenZeile(ZW_LISTE_SPALTEN, Object.assign({}, z, { zeileId: z.zeileId || z.id }));
+      ablageMerken(speicher, 'zwListe', zeile);
+      umgezogen.push(zeile);
+    }
+    delete speicher.zwListe;
+  }
+  return umgezogen;
+}
+
+// Zeilen aus „ZW-Liste lesen“ und „Protokoll lesen“ (neueste zuerst). Leere Items (Tabelle leer) fallen weg.
+function tabellenDaten(k, umgezogen) {
+  const d = k.daten;
+  if (!d || !d.plan || d.plan.art !== 'tabellen') abbrechen(502, 'ZW-Liste konnte nicht gelesen werden. Bitte erneut versuchen.');
+  const neu = (umgezogen || []).slice().reverse();
+  const ausTabelle = (d.zwListe || []).filter((z) => z && z.zeileId && !neu.some((u) => u.zeileId === z.zeileId));
+  return {
+    zwListe: neu.concat(ausTabelle).slice(0, ZW_LISTE_MAX).map(zwListeFuerSeite),
+    protokoll: (d.protokoll || []).filter((p) => p && p.zeit).slice(0, PROTOKOLL_MAX).map((p) => tabellenZeile(PROTOKOLL_SPALTEN, p)),
+  };
+}
+
+// Kennung einer Zeile in der ZW-Liste: Datum, Position und Versuch. Bleibt auch nach „Zurücksetzen“ eindeutig genug.
+function zeilenId(jetzt, positionId, versuch) {
+  return 'Z' + new Date(jetzt).toISOString().slice(0, 10).replace(/-/g, '') + '-' + positionId + '-' + versuch;
 }
 
 // Die von n8n geholten Daten für diese Aktion. Fehlen sie, lief „Vorbereiten“ nicht wie erwartet.
@@ -327,14 +419,26 @@ function ausgangMerken(speicher, meta, befehle) {
   for (const b of befehle) speicher.ausgang.push(Object.assign({}, b, meta));
 }
 
-function schreibenAnhaengen(antwort, speicher, jetzt) {
+// Schreibbefehle (TMP-Tabelle) und neue Zeilen für Protokoll und ZW-Liste an die Antwort hängen.
+// Was schon an der Antwort hängt (aus einem früheren Baustein desselben Laufs), bleibt davor.
+function ausgabeAnhaengen(antwort, speicher, jetzt) {
   const neu = (speicher && speicher.ausgang) || [];
-  if (speicher) delete speicher.ausgang;
-  if (!neu.length) return antwort;
-  const bisher = antwort.schreiben || [];
-  const lauf = bisher.length ? bisher[0].lauf : laufId(jetzt);
-  const zeit = new Date(jetzt).toISOString();
-  antwort.schreiben = bisher.concat(neu.map((b, i) => tmpZeile(b, bisher.length + i + 1, lauf, zeit)));
+  const ablage = (speicher && speicher.ablageAusgang) || { protokoll: [], zwListe: [] };
+  if (speicher) { delete speicher.ausgang; delete speicher.ablageAusgang; }
+  if (neu.length) {
+    const bisher = antwort.schreiben || [];
+    const lauf = bisher.length ? bisher[0].lauf : laufId(jetzt);
+    const zeit = new Date(jetzt).toISOString();
+    antwort.schreiben = bisher.concat(neu.map((b, i) => tmpZeile(b, bisher.length + i + 1, lauf, zeit)));
+    // Neue Zeilen der ZW-Liste gehören zu diesem Lauf in ZW_TMP
+    for (const z of ablage.zwListe) if (!z.lauf) z.lauf = lauf;
+  }
+  if (ablage.protokoll.length || ablage.zwListe.length || antwort.ablage) {
+    const alt = antwort.ablage || { protokoll: [], zwListe: [] };
+    // Ändert ein Aufruf dieselbe Zeile der ZW-Liste mehrmals, zählt die letzte Fassung
+    const zwListe = alt.zwListe.concat(ablage.zwListe).filter((z, i, l) => !l.slice(i + 1).some((y) => y.zeileId === z.zeileId));
+    antwort.ablage = { protokoll: alt.protokoll.concat(ablage.protokoll), zwListe };
+  }
   return antwort;
 }
 
@@ -359,7 +463,7 @@ function zwNachTmp(antwort, ergebnisse, speicher, jetzt) {
     benutzer: 'automatisch', aktion: 'tmp-tabelle', retoureId: ersteRetoure || undefined,
     ergebnis: fehler ? 'fehler' : 'geschrieben', meldung: fehler || zeilen.length + ' Zeilen, Lauf ' + lauf,
   });
-  const aus = { status: antwort.status, contentType: antwort.contentType, body: antwort.body };
+  const aus = { status: antwort.status, contentType: antwort.contentType, body: antwort.body, ablage: antwort.ablage };
   if (String(antwort.contentType || '').startsWith('text/html')) {
     const satz = fehler
       ? '<div class="w">TMP-Tabelle ZW_TMP: nicht geschrieben (' + esc(fehler) + ').</div>'
@@ -372,7 +476,7 @@ function zwNachTmp(antwort, ergebnisse, speicher, jetzt) {
       aus.body = JSON.stringify(inhalt);
     } catch (err) { /* Antwort unverändert lassen */ }
   }
-  return aus;
+  return ausgabeAnhaengen(aus, speicher, jetzt);
 }
 
 // ---------- Anmeldung ----------
@@ -640,8 +744,9 @@ function entscheidungenLesen(body) {
   }));
 }
 
-// Bilder kommen als Data-URL (data:image/jpeg;base64,…). Sie gehen nur als Anhang in die Mails
-// und werden nicht im Speicher des Workflows abgelegt.
+// Bilder kommen als Data-URL (data:image/jpeg;base64,…). Sie gehen als Anhang in die Mails und werden nicht im Speicher
+// des Workflows abgelegt. Bei einem neuen ZW-Artikel kommen sie zusätzlich als Schreibbefehle in die TMP-Tabelle:
+// beim Anlegen in den Shopware-Medienordner „ZW-Retouren“ hochladen, nach der Freigabe als 2. Bild in den Artikel.
 function bilderLesen(liste, positionId) {
   if (liste === undefined || liste === null) return [];
   if (!Array.isArray(liste)) abbrechen(400, 'Position ' + positionId + ': Bilder ungültig.');
@@ -655,8 +760,16 @@ function bilderLesen(liste, positionId) {
   });
 }
 
-function bilderZeile(anzahl) {
-  return anzahl ? anzahl + (anzahl === 1 ? ' Bild' : ' Bilder') + ' im Anhang der Mail' : 'keine';
+function bilderZeile(anzahl, inShopware) {
+  if (!anzahl) return 'keine';
+  return anzahl + (anzahl === 1 ? ' Bild' : ' Bilder') + ' im Anhang der Mail' + (inShopware ? ', nach der Freigabe als 2. Bild im Shopware-Artikel' : '');
+}
+
+// Shopware-Medien-IDs für die Bilder einer Position. Fest aus Position, Versuch und Zeit abgeleitet (32 Hex-Zeichen),
+// so stehen sie schon in den Schreibbefehlen und brauchen keinen Platzhalter.
+function bilderMedien(bilder, positionId, versuch, jetzt) {
+  const id = (art, i) => bytesZuHex(sha256(utf8('zw-bild|' + art + '|' + positionId + '|' + versuch + '|' + i + '|' + jetzt))).slice(0, 32);
+  return bilder.map((b, i) => ({ mediaId: id('medium', i), produktMediaId: id('produkt', i), name: b.name, mimeType: b.mimeType }));
 }
 
 function vorschauListe(speicher, body, e, quellen) {
@@ -732,6 +845,12 @@ function anlegen(speicher, body, e, person, jetzt, url, quellen) {
     preisSetzen(v, x.lagerPreis);
     v.preisGrund = v.preisVomLager ? x.preisGrund : '';
     const versuch = (bisher.versuch || 0) + 1;
+    // Bilder vom Lager: nur bei einem neuen ZW-Artikel nach Shopware (bei +1 gehören die Bilder des Artikels zum ersten Stück)
+    v.bilderMedien = v.neu ? bilderMedien(x.bilder, x.positionId, versuch, jetzt) : [];
+    if (v.bilderMedien.length) {
+      ausgangMerken(speicher, { aktion: 'anlegen', retoureId: pos.retoureId, positionId: x.positionId },
+        bilderHochladenBefehle(v, x.bilder, versuch, String(e.shopwareBilderOrdner || '').trim()));
+    }
     schreibplanMerken(speicher, x.positionId, versuch, zwSchreibplan(v, {
       plenty: (quellen.originale || {})[v.originalVarianteId] || null,
       shopware: quellen.shopware[v.originalVarianteId] || null,
@@ -803,7 +922,7 @@ function vorschauZeilen(speicher, v) {
     ['Original', 'Variante ' + v.originalVarianteId + ' · EAN ' + v.ean],
     ['Zustand', v.zustand],
     ['Grund', v.grund || '–'],
-    ['Bilder', bilderZeile(v.bilder || 0)],
+    ['Bilder', bilderZeile(v.bilder || 0, (v.bilderMedien || []).length > 0)],
     ['Barcode', v.barcode],
     ['Preis', euro(v.preis) + (v.preisVomLager ? ' (vom Lager geändert, Empfehlung ' + euro(v.empfehlung) + ')' : ' (Empfehlung)') + ', Streichpreis ' + euro(v.streichpreis)],
     ...(v.preisGrund ? [['Begründung Preis', v.preisGrund]] : []),
@@ -888,6 +1007,7 @@ function freigabeEntscheiden(body, e, speicher, jetzt) {
   if (body.entscheidung === 'ablehnen') {
     speicher.positionen[f.positionId] = Object.assign({}, f.st, { status: 'abgelehnt', meldung: 'Abgelehnt, nichts angelegt', aktualisiert: zeit });
     kommentarSim(speicher, retoureId, zeit, 'ZW abgelehnt: ' + v.zustand + ' (' + f.positionId + '), nichts angelegt', { aktion: 'freigabe', positionId: f.positionId });
+    ausgangMerken(speicher, { aktion: 'freigabe', retoureId, positionId: f.positionId }, bilderLoeschenBefehle(v.bilderMedien, 'abgelehnt'));
     protokollieren(speicher, jetzt, { benutzer: von, aktion: 'freigabe', retoureId, positionId: f.positionId, zustand: v.zustand, ergebnis: 'abgelehnt' });
     return html(200, 'Abgelehnt', '<h1>Abgelehnt</h1><p>Es wurde nichts angelegt. Das Lager sieht den Status auf der ZW-Station.</p>');
   }
@@ -914,18 +1034,24 @@ function freigabeEntscheiden(body, e, speicher, jetzt) {
   }
   const kommentar = zwKommentar({ zustand: v.zustand, varianteId, plus1, grund: v.grund });
   const neuerStatus = statusWennFertig(speicher, retoureId, f.positionId, e);
+  const zeileId = zeilenId(jetzt, f.positionId, f.versuch);
   // TMP-Tabelle: erst Artikel anlegen bzw. +1, dann Kommentar (mit der neuen Varianten-ID als Platzhalter), dann Status
   const plan = schreibplan(speicher, f.positionId, f.versuch);
-  ausgangMerken(speicher, { aktion: 'freigabe', retoureId, positionId: f.positionId }, freigabeBefehle(plan, v, plus1, varianteId, jetzt));
+  const meta = { aktion: 'freigabe', retoureId, positionId: f.positionId };
+  ausgangMerken(speicher, meta, freigabeBefehle(plan, v, plus1, varianteId, jetzt));
+  // Wird aus „neu“ doch +1, kommen die schon hochgeladenen Bilder nicht in den Artikel
+  if (plus1) ausgangMerken(speicher, meta, bilderLoeschenBefehle(v.bilderMedien, 'Bestand +1 statt neuer Artikel'));
+  // Echtbetrieb: die neue Varianten-ID gehört in die ZW-Liste (dort steht im Probelauf SIM-…)
+  if (!plus1) ausgangMerken(speicher, meta, [zwListeBefehl(zeileId)]);
   kommentarSim(speicher, retoureId, zeit, kommentar, {
     aktion: 'freigabe', positionId: f.positionId,
     echtText: plus1 ? kommentar : zwKommentar({ zustand: v.zustand, varianteId: NEU_VARIANTE, plus1: false, grund: v.grund }),
   });
-  speicher.zwListe.push({
-    id: 'Z' + (sim.naechsteZeile++), datum: zeit.slice(0, 10), retoureId, originalVarianteId: v.originalVarianteId,
+  zwListeMerken(speicher, {
+    zeileId, datum: zeit.slice(0, 10), retoureId, positionId: f.positionId, originalVarianteId: v.originalVarianteId,
     zwVarianteId: varianteId, barcode: v.barcode, name: v.name, zustand: v.zustand, grund: v.grund || '', bilder: v.bilder || 0,
     preis: v.preis, empfehlung: v.empfehlung, preisVomLager: !!v.preisVomLager, preisGrund: v.preisGrund || '', streichpreis: v.streichpreis,
-    neuOderPlus1: plus1 ? '+1' : 'neu', freigegebenVon: von, probelauf: true, bestandGebucht: false, gebuchtVon: null, gebuchtAm: null,
+    neuOderPlus1: plus1 ? '+1' : 'neu', freigegebenVon: von, probelauf: true, bestandGebucht: false, gebuchtVon: '', gebuchtAm: '',
   });
   speicher.positionen[f.positionId] = Object.assign({}, f.st, {
     status: plus1 ? 'plus1' : 'angelegt', varianteId, barcode: v.barcode, preis: v.preis, meldung: kommentar, aktualisiert: zeit,
@@ -964,13 +1090,15 @@ function retoureAbschliessenWennFertig(speicher, retoureId, jetzt, e) {
 
 // ---------- ZW-Liste ----------
 
-function zwListeBuchen(speicher, body, person, jetzt) {
-  const zeile = speicher.zwListe.find((z) => z.id === String(body.id || ''));
-  if (!zeile) abbrechen(404, 'Zeile nicht gefunden.');
+// liste: die neuesten Zeilen aus ZW_LISTE (wie auf der Seite). Geändert wird die ganze Zeile (Schlüssel zeileId).
+function zwListeBuchen(speicher, liste, body, person, jetzt) {
+  const gefunden = liste.find((z) => z.id === String(body.id || ''));
+  if (!gefunden) abbrechen(404, 'Zeile nicht gefunden.');
   const gebucht = body.gebucht !== false;
-  zeile.bestandGebucht = gebucht;
-  zeile.gebuchtVon = gebucht ? person.benutzer : null;
-  zeile.gebuchtAm = gebucht ? new Date(jetzt).toISOString() : null;
+  const zeile = Object.assign({}, gefunden, {
+    bestandGebucht: gebucht, gebuchtVon: gebucht ? person.benutzer : '', gebuchtAm: gebucht ? new Date(jetzt).toISOString() : '',
+  });
+  zwListeMerken(speicher, Object.assign({ zeileId: zeile.id }, zeile));
   protokollieren(speicher, jetzt, { benutzer: person.benutzer, aktion: 'bestand-gebucht', retoureId: zeile.retoureId, ergebnis: gebucht ? 'gebucht' : 'zurückgenommen', varianteId: zeile.zwVarianteId });
   return json(200, { ok: true, zeile });
 }
@@ -996,7 +1124,7 @@ function zwNachMailversand(antwort, gesendet, speicher, jetzt) {
     zwMailfehler(speicher, m.positionId, String(fehler).slice(0, 300), jetzt);
     if (eintrag) Object.assign(eintrag, speicher.positionen[m.positionId]);
   });
-  return schreibenAnhaengen({ status: antwort.status, contentType: antwort.contentType, body: JSON.stringify(inhalt), schreiben: antwort.schreiben }, speicher, jetzt);
+  return ausgabeAnhaengen({ status: antwort.status, contentType: antwort.contentType, body: JSON.stringify(inhalt), schreiben: antwort.schreiben, ablage: antwort.ablage }, speicher, jetzt);
 }
 
 // Mail konnte nicht gesendet werden: Position auf Fehler setzen.
@@ -1006,9 +1134,13 @@ function zwMailfehler(speicher, positionId, meldung, jetzt) {
   const zeit = new Date(jetzt).toISOString();
   speicher.positionen[positionId] = Object.assign({}, st, { status: 'fehler', meldung: 'Freigabe-Mail nicht gesendet: ' + meldung, aktualisiert: zeit });
   if (st.retoureId) kommentarSim(speicher, st.retoureId, zeit, 'ZW-Fehler (' + positionId + '): Freigabe-Mail nicht gesendet', { aktion: 'freigabe-mail', positionId });
+  ausgangMerken(speicher, { aktion: 'freigabe-mail', retoureId: st.retoureId, positionId }, bilderLoeschenBefehle((st.vorschau || {}).bilderMedien, 'Freigabe-Mail nicht gesendet'));
   protokollieren(speicher, jetzt, { benutzer: 'automatisch', aktion: 'freigabe-mail', positionId, ergebnis: 'fehler', meldung });
 }
 
 // NUR-NODE-ANFANG
-module.exports = { zwVerarbeiten, zwVorbereiten, zwRundeB, zwRoute, zwMailfehler, zwNachMailversand, zwNachTmp };
+module.exports = {
+  zwVerarbeiten, zwVorbereiten, zwRundeB, zwRoute, zwMailfehler, zwNachMailversand, zwNachTmp,
+  PROTOKOLL_SPALTEN, ZW_LISTE_SPALTEN, ZAHL_SPALTEN, JA_NEIN_SPALTEN,
+};
 // NUR-NODE-ENDE

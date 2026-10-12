@@ -10,7 +10,8 @@ const { zwName } = require('./zw-logik.js');
 const NEU_ARTIKEL = '‹neue Artikel-ID›';
 const NEU_VARIANTE = '‹neue Varianten-ID›';
 const NEU_PRODUKT = '‹neue Shopware-Produkt-ID›';
-const NEU_MEDIUM = '‹neue Medien-ID›';
+const BILD_ORDNER = '‹Ordner ZW-Retouren›';
+const BILD_DATEI = '‹Bilddatei›';
 
 // Feste Werte aus Abschnitt 5b/6 der Projektseite (per API gelesen am 07.10.2026)
 const PLENTY_ZW = { zustand: 4, zustandApi: 5, typLagerware: 0, tagBWare: 32 };
@@ -138,15 +139,16 @@ function plentyNeu(v, p, hinweise) {
     }));
   }
 
+  // Einkaufspreis: wie beim Original, in der Variante und beim Lieferanten (entschieden 12.10.2026)
   if (Number(va.purchasePrice) !== Number(((va.variationSuppliers || [])[0] || {}).purchasePrice)) {
-    hinweise.push('Einkaufspreis: Variante ' + va.purchasePrice + ', Lieferant ' + ((va.variationSuppliers || [])[0] || {}).purchasePrice + '. Übernommen wird beides wie beim Original (offen bei Tobias).');
+    hinweise.push('Einkaufspreis wie beim Original: Variante ' + va.purchasePrice + ', Lieferant ' + ((va.variationSuppliers || [])[0] || {}).purchasePrice + '.');
   }
   return schritte;
 }
 
 // ---------- Shopware: Original klonen und anpassen ----------
 
-function shopwareNeu(v, sw, bilder, jetzt, hinweise) {
+function shopwareNeu(v, sw, jetzt, hinweise) {
   const schritte = [];
   const ueberschreiben = {
     productNumber: NEU_VARIANTE,
@@ -173,18 +175,52 @@ function shopwareNeu(v, sw, bilder, jetzt, hinweise) {
     schritte.push(befehl('shopware', 'Sale-Tag entfernen', 'DELETE', '/api/product/' + NEU_PRODUKT + '/tags/' + id));
   }
 
-  if (bilder > 0) {
-    for (let i = 1; i <= bilder; i++) {
-      const m = NEU_MEDIUM.replace('›', ' ' + i + '›');
-      schritte.push(befehl('shopware', 'Bild ' + i + ' vom Lager: Medium anlegen', 'POST', '/api/media', { id: m, mediaFolderId: '‹Ordner ZW-Retouren›' }));
-      schritte.push(befehl('shopware', 'Bild ' + i + ' vom Lager hochladen', 'POST', '/api/_action/media/' + m + '/upload?extension=jpg&fileName=zw-' + v.retoureId + '-' + v.positionId + '-' + i, '‹Bilddatei›'));
-    }
+  // Bilder vom Lager: beim Anlegen schon in den Medienordner „ZW-Retouren“ hochgeladen (bilderHochladenBefehle),
+  // jetzt direkt hinter das Hauptbild. Die Bilder des Klons ab Position 1 rücken nach hinten.
+  const medien = v.bilderMedien || [];
+  if (medien.length) {
     schritte.push(befehl('shopware', 'Lager-Bilder als 2. Bild einsortieren', 'PATCH', '/api/product/' + NEU_PRODUKT, {
-      media: Array.from({ length: bilder }, (_, i) => ({ mediaId: NEU_MEDIUM.replace('›', ' ' + (i + 1) + '›'), position: i + 1 })),
-    }, 'Vorher die Bilder des Klons lesen und ab Position 1 um ' + bilder + ' nach hinten schieben.'));
-    hinweise.push('Bilder vom Lager werden heute nicht zwischengespeichert. Für 6.2 nötig: Ordner „ZW-Retouren“ in Shopware (Vorschlag Abschnitt 6).');
+      media: medien.map((m, i) => ({ id: m.produktMediaId, mediaId: m.mediaId, position: i + 1 })),
+    }, 'Vorher GET /api/product/' + NEU_PRODUKT + '/media lesen und alle Bilder außer dem Hauptbild (kleinste position) um ' + medien.length +
+      ' nach hinten schieben (position + ' + medien.length + '), z. B. im selben PATCH mit ihrer id. Hauptbild (coverId) bleibt.'));
+  } else if (v.bilder > 0) {
+    hinweise.push('Bilder vom Lager nur in der Mail: Die Position wurde vor dem Update vom 12.10.2026 angelegt.');
   }
   return schritte;
+}
+
+// Beim Anlegen (vor der Freigabe): Bilder vom Lager in den Shopware-Medienordner „ZW-Retouren“ hochladen, noch keinem Artikel
+// zugeordnet. Die Medien-IDs stehen fest (bilderMedien in ablauf.js). Die Datei hängt am Item als binary „datei“
+// (Baustein „Schreibbefehle aufteilen“), in der TMP-Tabelle steht dafür ‹Bilddatei›.
+function bilderHochladenBefehle(v, bilder, versuch, ordnerId) {
+  const schritte = [];
+  (v.bilderMedien || []).forEach((m, i) => {
+    const b = bilder[i] || {};
+    const endung = String(m.name || '').split('.').pop() || 'jpg';
+    const datei = 'zw-' + v.retoureId + '-' + v.positionId + '-' + versuch + '-' + (i + 1);
+    schritte.push(befehl('shopware', 'Bild ' + (i + 1) + ' vom Lager: Medium anlegen', 'POST', '/api/media',
+      { id: m.mediaId, mediaFolderId: ordnerId || BILD_ORDNER },
+      ordnerId ? 'Ordner ZW-Retouren aus Einstellungen (shopwareBilderOrdner).' : 'Ordner ZW-Retouren in Shopware anlegen und seine ID in Einstellungen → shopwareBilderOrdner eintragen.'));
+    const hoch = befehl('shopware', 'Bild ' + (i + 1) + ' vom Lager hochladen', 'POST',
+      '/api/_action/media/' + m.mediaId + '/upload?extension=' + endung + '&fileName=' + datei, BILD_DATEI,
+      'Datei = binary „datei“ dieses Items (' + m.mimeType + '), als Body senden mit Content-Type ' + m.mimeType + '. Bei Ablehnung wird das Medium wieder gelöscht.');
+    hoch.datei = { daten: b.daten, mimeType: m.mimeType, name: datei + '.' + endung };
+    schritte.push(hoch);
+  });
+  return schritte;
+}
+
+// Hochgeladene Bilder wieder löschen (abgelehnt, Mail nicht gesendet oder doch nur +1)
+function bilderLoeschenBefehle(medien, grund) {
+  return (medien || []).map((m, i) => befehl('shopware', 'Bild ' + (i + 1) + ' vom Lager löschen', 'DELETE', '/api/media/' + m.mediaId, undefined,
+    'Grund: ' + grund + '. Das Bild wurde beim Anlegen hochgeladen und wird nicht gebraucht.'));
+}
+
+// Nach dem echten Anlegen: neue Varianten-ID in die Zeile der ZW-Liste (n8n Data Table ZW_LISTE, kein HTTP)
+function zwListeBefehl(zeileId) {
+  return befehl('n8n', 'ZW-Liste: neue Varianten-ID eintragen', 'UPDATE', 'Data Table ZW_LISTE, Zeile zeileId = ' + zeileId,
+    { zwVarianteId: NEU_VARIANTE, probelauf: false },
+    'Data-Table-Baustein „Update row(s)“, Filter zeileId = ' + zeileId + '. Im Probelauf steht dort SIM-….');
 }
 
 // ---------- Plan für eine Position ----------
@@ -199,7 +235,7 @@ function zwSchreibplan(v, o, jetzt) {
   if (v.neu) {
     if (o.plenty && o.plenty.variante) schritte = schritte.concat(plentyNeu(v, o.plenty, hinweise));
     else fehlt.push('plenty-Daten des Originals ' + v.originalVarianteId);
-    if (sw && sw.id) schritte = schritte.concat(shopwareNeu(v, sw, v.bilder || 0, jetzt, hinweise));
+    if (sw && sw.id) schritte = schritte.concat(shopwareNeu(v, sw, jetzt, hinweise));
     else fehlt.push('Shopware-Daten des Originals ' + v.originalVarianteId);
   } else if (v.bestehendSimuliert) {
     hinweise.push('+1 auf einen im Probelauf nachgestellten Artikel (' + v.bestehendeVarianteId + '). Im Echtbetrieb gäbe es ihn wirklich.');
@@ -249,8 +285,9 @@ function infoZeile(titel, hinweis) {
   return { system: 'info', titel, method: '', endpoint: '', hinweis };
 }
 
+// datei (Bild vom Lager) wandert nicht in die Tabelle: „Schreibbefehle aufteilen“ macht daraus binary „datei“.
 function tmpZeile(b, nr, lauf, zeit) {
-  return {
+  const zeile = {
     lauf, nr, zeit,
     aktion: b.aktion || '',
     retoureId: b.retoureId ? String(b.retoureId) : '',
@@ -264,13 +301,15 @@ function tmpZeile(b, nr, lauf, zeit) {
     platzhalter: b.system === 'info' ? '' : platzhalterIn(b).join(', '),
     status: b.system === 'info' ? 'info' : 'offen',
   };
+  if (b.datei) zeile.datei = b.datei;
+  return zeile;
 }
 
 // Plan als HTML für die Freigabe-Seite
 function schreibplanHtml(plan, extra) {
   if (!plan) return '';
   const schritte = plan.schritte.concat(extra || []);
-  const titel = { plenty: 'plenty', shopware: 'Shopware' };
+  const titel = { plenty: 'plenty', shopware: 'Shopware', n8n: 'n8n' };
   return '<h2>Trockenlauf: ' + schritte.length + ' Schreibbefehle (nicht gesendet)</h2>' +
     '<p class="m">So würde n8n nach „Freigeben“ in plenty und Shopware schreiben. ‹…› sind IDs, die erst beim Anlegen entstehen.</p>' +
     (plan.fehlt.length ? '<div class="w">Fehlt für den Plan: ' + plan.fehlt.map(escText).join(', ') + '</div>' : '') +
@@ -282,5 +321,5 @@ function schreibplanHtml(plan, extra) {
 }
 
 // NUR-NODE-ANFANG
-module.exports = { NEU_VARIANTE, zwSchreibplan, retoureBefehle, kommentarBefehl, statusBefehl, infoZeile, tmpZeile, platzhalterIn, schreibplanHtml, shopwarePreis, shopwareBeschreibung, PLENTY_ZW, SHOPWARE_BWARE, SHOPWARE_ZUSTAND };
+module.exports = { NEU_VARIANTE, zwSchreibplan, bilderHochladenBefehle, bilderLoeschenBefehle, zwListeBefehl, retoureBefehle, kommentarBefehl, statusBefehl, infoZeile, tmpZeile, platzhalterIn, schreibplanHtml, shopwarePreis, shopwareBeschreibung, PLENTY_ZW, SHOPWARE_BWARE, SHOPWARE_ZUSTAND };
 // NUR-NODE-ENDE

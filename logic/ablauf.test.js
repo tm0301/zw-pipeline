@@ -122,6 +122,8 @@ function shopwareSuchen(suche) {
 }
 
 // ---------- Ein Aufruf wie in n8n: Vorbereiten → plenty A → Runde B → plenty B → Shopware → ZW-Logik ----------
+// Die Data Tables ZW_LISTE und ZW_PROTOKOLL werden nachgestellt: gelesen wie „ZW-Liste lesen“/„Protokoll lesen“
+// (neueste zuerst), geschrieben wie „Protokoll schreiben“ (neue Zeile) und „ZW-Liste schreiben“ (Upsert über zeileId).
 
 function aufbau() {
   const einstellungen = {
@@ -136,6 +138,15 @@ function aufbau() {
   };
   const k = { einstellungen, speicher: {}, jetzt: Date.parse('2026-10-07T10:00:00Z'), seiteHtml: '<html>Seite</html>' };
   const abfragen = [];
+  const tabellen = { zwListe: [], protokoll: [] };
+  const ablegen = (ablage) => {
+    if (!ablage) return;
+    tabellen.protokoll.push(...ablage.protokoll);
+    for (const z of ablage.zwListe) {
+      const i = tabellen.zwListe.findIndex((x) => x.zeileId === z.zeileId);
+      if (i >= 0) tabellen.zwListe[i] = Object.assign({}, tabellen.zwListe[i], z); else tabellen.zwListe.push(z);
+    }
+  };
   const lauf = (anfrage) => {
     const v = zwVorbereiten(anfrage, k);
     k.daten = null;
@@ -144,7 +155,11 @@ function aufbau() {
       const b = plentyStapel(zwRundeB(v.plan, a), abfragen);
       k.daten = { plan: v.plan, a, b, shopware: shopwareSuchen(v.shopware) };
     }
+    if (v.weiter === 'tabellen') {
+      k.daten = { plan: v.plan, zwListe: tabellen.zwListe.slice().reverse().slice(0, 300), protokoll: tabellen.protokoll.slice().reverse().slice(0, 50) };
+    }
     const r = zwVerarbeiten(anfrage, k);
+    ablegen(r.ablage);
     return Object.assign({}, r, { daten: r.contentType.startsWith('application/json') ? JSON.parse(r.body) : null });
   };
   const rufe = (aktion, { body, query, schluessel } = {}) => lauf({
@@ -153,7 +168,7 @@ function aufbau() {
   });
   const anmelden = (benutzer, passwort) => rufe('anmelden', { body: { benutzer, passwort } }).daten.schluessel;
   const link = (mail) => Object.fromEntries(new URL(mail.html.match(/href="([^"]+)"/)[1].replace(/&amp;/g, '&')).searchParams);
-  return { k, rufe, lauf, anmelden, abfragen, link };
+  return { k, rufe, lauf, anmelden, abfragen, link, tabellen, ablegen };
 }
 
 // ---------- Anmeldung ----------
@@ -394,7 +409,7 @@ test('kompletter Durchlauf: anlegen, Mail, freigeben, +1, ablehnen, fertig', () 
   // ZW-Liste und Protokoll
   const zl = rufe('zw-liste', { schluessel: s }).daten;
   assert.deepEqual(zl.zwListe.map((z) => [z.id, z.zwVarianteId, z.neuOderPlus1, z.preis, z.bestandGebucht, z.grund]), [
-    ['Z2', '788902', '+1', 820.99, false, 'Kleine Delle hinten'], ['Z1', 'SIM-1', 'neu', 988.99, false, 'Kratzer an der Seite'],
+    ['Z20261007-5001-2', '788902', '+1', 820.99, false, 'Kleine Delle hinten'], ['Z20261007-5102-1', 'SIM-1', 'neu', 988.99, false, 'Kratzer an der Seite'],
   ]);
   assert.ok(zl.protokoll.some((x) => x.aktion === 'freigabe' && x.ergebnis === 'abgelehnt'));
   assert.ok(zl.protokoll.every((x) => x.zeit));
@@ -420,13 +435,17 @@ test('ZW-Liste: Bestand gebucht setzen und zurücknehmen', () => {
   rufe('retoure', { schluessel: s, query: { nr: '241881' } });
   const a = rufe('anlegen', { schluessel: s, body: { entscheidungen: [{ positionId: '5001', zustand: 'Gut', grund: 'Kratzer an der Seite' }] } });
   rufe('freigabe-entscheiden', { body: Object.assign({}, link(a.mails[0]), { entscheidung: 'freigeben' }) });
-  const b = rufe('zw-liste-buchen', { schluessel: s, body: { id: 'Z1', gebucht: true } });
+  const id = rufe('zw-liste', { schluessel: s }).daten.zwListe[0].id;
+  const b = rufe('zw-liste-buchen', { schluessel: s, body: { id, gebucht: true } });
   assert.equal(b.status, 200);
   assert.equal(b.daten.zeile.bestandGebucht, true);
   assert.equal(b.daten.zeile.gebuchtVon, 'lager1');
-  assert.equal(rufe('zw-liste-buchen', { schluessel: s, body: { id: 'Z1', gebucht: false } }).daten.zeile.gebuchtVon, null);
+  assert.deepEqual(b.ablage.zwListe.map((z) => [z.zeileId, z.bestandGebucht, z.gebuchtVon]), [[id, true, 'lager1']], 'ganze Zeile per Upsert');
+  assert.equal(b.ablage.zwListe[0].name, '[Zweite Wahl] Miele H 2861-1 B 125 Edition Einbau-Backofen Edelstahl/CleanSteel');
+  assert.equal(rufe('zw-liste', { schluessel: s }).daten.zwListe[0].bestandGebucht, true);
+  assert.equal(rufe('zw-liste-buchen', { schluessel: s, body: { id, gebucht: false } }).daten.zeile.gebuchtVon, '');
   assert.equal(rufe('zw-liste-buchen', { schluessel: s, body: { id: 'Z9' } }).status, 404);
-  assert.equal(rufe('zw-liste-buchen', { body: { id: 'Z1' } }).status, 401);
+  assert.equal(rufe('zw-liste-buchen', { body: { id } }).status, 401);
 });
 
 test('Fehler (Original fehlt in Shopware) landet als Kommentar, Mailfehler setzt Position auf Fehler', () => {
@@ -744,7 +763,7 @@ test('Trockenlauf: neuer ZW-Artikel – Schreibbefehle für plenty und Shopware 
   assert.deepEqual(nach('Tags').body.map((x) => x.tagId), [97, 32]);
   assert.deepEqual(plan.schritte.filter((x) => x.titel.startsWith('Versandprofil')).map((x) => x.body.profileId), [9, 26]);
   assert.deepEqual(nach('Eigenschaft 11').body.relationValues, [{ lang: '0', value: '13' }]);
-  assert.ok(plan.hinweise.some((h) => /Einkaufspreis: Variante 644.11, Lieferant 579.5/.test(h)));
+  assert.ok(plan.hinweise.some((h) => /Einkaufspreis wie beim Original: Variante 644.11, Lieferant 579.5/.test(h)));
 
   const klon = nach('Original 772160 klonen');
   assert.equal(klon.endpoint, '/api/_action/clone/product/a1');
@@ -758,7 +777,20 @@ test('Trockenlauf: neuer ZW-Artikel – Schreibbefehle für plenty und Shopware 
   assert.equal(o.description, '<p><strong>Zweite Wahl (Neuwertig):</strong> Nur Karton beschädigt</p><p>Original-Text</p>');
   assert.ok(plan.schritte.some((x) => x.method === 'DELETE' && x.endpoint.endsWith('/categories/019f13061667716a9525667c2acb4d56')));
   assert.ok(plan.schritte.some((x) => x.method === 'DELETE' && x.endpoint.endsWith('/tags/019c75c6b03378f4bb6bb46085c38bdc')));
-  assert.ok(nach('Lager-Bilder als 2. Bild'));
+  const medien = k.speicher.positionen['5001'].vorschau.bilderMedien;
+  assert.equal(medien.length, 1);
+  assert.match(medien[0].mediaId, /^[0-9a-f]{32}$/);
+  assert.deepEqual(nach('Lager-Bilder als 2. Bild').body, { media: [{ id: medien[0].produktMediaId, mediaId: medien[0].mediaId, position: 1 }] });
+  assert.match(nach('Lager-Bilder als 2. Bild').hinweis, /um 1 nach hinten/);
+  // Hochladen schon beim Anlegen (in den Ordner ZW-Retouren), Datei hängt an der Zeile, nicht im Text
+  assert.deepEqual(a.schreiben.map((x) => [x.aktion, x.method, x.endpoint.split('?')[0]]), [
+    ['anlegen', 'POST', '/api/media'], ['anlegen', 'POST', '/api/_action/media/' + medien[0].mediaId + '/upload'],
+  ]);
+  assert.deepEqual(JSON.parse(a.schreiben[0].body), { id: medien[0].mediaId, mediaFolderId: '‹Ordner ZW-Retouren›' });
+  assert.equal(a.schreiben[1].body, '‹Bilddatei›');
+  assert.equal(a.schreiben[1].platzhalter, '‹Bilddatei›');
+  assert.deepEqual(a.schreiben[1].datei, { daten: 'AAAA', mimeType: 'image/jpeg', name: 'zw-241881-5001-1-1.jpg' });
+  assert.match(a.mails[0].html, /nach der Freigabe als 2\. Bild im Shopware-Artikel/);
 
   // Freigabe-Seite zeigt den Plan samt Kommentar und Status (einzige Position → 9.3)
   const q = link(a.mails[0]);
@@ -769,9 +801,79 @@ test('Trockenlauf: neuer ZW-Artikel – Schreibbefehle für plenty und Shopware 
   assert.match(seite, /ZW angelegt: ‹neue Varianten-ID› \(Neuwertig\)/);
   assert.match(seite, /PUT \/rest\/orders\/241881/);
   assert.match(seite, /&quot;statusId&quot;: 9\.3/);
-  const fertig = rufe('freigabe-entscheiden', { body: Object.assign({}, q, { entscheidung: 'freigeben' }) }).body;
-  assert.match(fertig, /Trockenlauf/);
-  assert.match(fertig, /ZW angelegt: SIM-1 \(Neuwertig\)/);
+  const fr = rufe('freigabe-entscheiden', { body: Object.assign({}, q, { entscheidung: 'freigeben' }) });
+  assert.match(fr.body, /Trockenlauf/);
+  assert.match(fr.body, /ZW angelegt: SIM-1 \(Neuwertig\)/);
+  // Nach dem echten Anlegen: neue Varianten-ID in die ZW-Liste (Befehl für n8n, kein HTTP)
+  const zl = fr.schreiben.find((x) => x.system === 'n8n');
+  assert.equal(zl.method, 'UPDATE');
+  assert.equal(zl.endpoint, 'Data Table ZW_LISTE, Zeile zeileId = Z20261007-5001-1');
+  assert.deepEqual(JSON.parse(zl.body), { zwVarianteId: '‹neue Varianten-ID›', probelauf: false });
+  assert.equal(fr.ablage.zwListe[0].zeileId, 'Z20261007-5001-1');
+  assert.equal(fr.ablage.zwListe[0].positionId, '5001');
+  assert.equal(fr.ablage.zwListe[0].zwVarianteId, 'SIM-1');
+  assert.equal(fr.ablage.zwListe[0].lauf, fr.schreiben[0].lauf, 'ZW-Liste kennt den Lauf in ZW_TMP');
+  assert.ok(!fr.schreiben.some((x) => x.method === 'DELETE' && x.endpoint.startsWith('/api/media/')), 'Bilder bleiben');
+});
+
+test('Bilder vom Lager: bei Ablehnen, Mailfehler und +1 wieder löschen, bei +1 gar nicht erst hochladen', () => {
+  const { k, rufe, anmelden, link } = aufbau();
+  const s = anmelden('lager1', 'Passwort-Lager1');
+  rufe('retoure', { schluessel: s, query: { nr: '241881' } });
+  rufe('retoure', { schluessel: s, query: { nr: '241900' } });
+  const bild = (n) => Array.from({ length: n }, (_, i) => ({ name: 'b' + i + '.jpg', daten: 'data:image/jpeg;base64,QUJD' }));
+  k.einstellungen.shopwareBilderOrdner = 'ordner123';
+
+  // Ablehnen: beide Bilder löschen
+  const a = rufe('anlegen', { schluessel: s, body: { entscheidungen: [{ positionId: '5001', zustand: 'Gut', grund: 'Delle', bilder: bild(2) }] } });
+  assert.equal(JSON.parse(a.schreiben[0].body).mediaFolderId, 'ordner123');
+  const ids = k.speicher.positionen['5001'].vorschau.bilderMedien.map((m) => m.mediaId);
+  assert.equal(new Set(ids).size, 2);
+  const ab = rufe('freigabe-entscheiden', { body: Object.assign({}, link(a.mails[0]), { entscheidung: 'ablehnen' }) });
+  assert.deepEqual(ab.schreiben.filter((x) => x.method === 'DELETE').map((x) => x.endpoint), ids.map((id) => '/api/media/' + id));
+
+  // Neuer Versuch: neue Medien-IDs. Mail geht nicht raus → löschen
+  const a2 = rufe('anlegen', { schluessel: s, body: { entscheidungen: [{ positionId: '5001', zustand: 'Gut', grund: 'Delle', bilder: bild(1) }] } });
+  const id2 = k.speicher.positionen['5001'].vorschau.bilderMedien[0].mediaId;
+  assert.ok(!ids.includes(id2));
+  const m = zwNachMailversand(a2, [{ error: 'SMTP' }], k.speicher, k.jetzt);
+  assert.deepEqual(m.schreiben.filter((x) => x.method === 'DELETE').map((x) => [x.aktion, x.endpoint]), [['freigabe-mail', '/api/media/' + id2]]);
+
+  // Vorhandener ZW-Artikel (Sehr gut, 788902): Bilder nur in der Mail
+  const p = rufe('anlegen', { schluessel: s, body: { entscheidungen: [{ positionId: '5001', zustand: 'Sehr gut', grund: 'Delle', bilder: bild(1) }] } });
+  assert.equal(p.mails[0].anhaenge.length, 1);
+  assert.equal(p.schreiben, undefined, 'nichts hochzuladen');
+  assert.match(p.mails[0].html, /1 Bild im Anhang der Mail</);
+
+  // Zwei Stücke im selben Zustand: das zweite wird beim Freigeben zu +1, seine Bilder werden gelöscht
+  const x1 = rufe('anlegen', { schluessel: s, body: { entscheidungen: [{ positionId: '5102', zustand: 'Gut', grund: 'Delle', bilder: bild(1) }] } });
+  rufe('freigabe-entscheiden', { body: Object.assign({}, link(x1.mails[0]), { entscheidung: 'freigeben' }) });
+  k.speicher.positionen['5102'] = { status: 'offen' };
+  const x2 = rufe('anlegen', { schluessel: s, body: { entscheidungen: [{ positionId: '5102', zustand: 'Gut', grund: 'Delle', bilder: bild(1) }] } });
+  assert.equal(x2.schreiben, undefined, 'nachgestellter Artikel gilt schon in der Vorschau als +1');
+});
+
+test('Protokoll und ZW-Liste: einmaliger Umzug aus dem Speicher in die Data Tables', () => {
+  const { k, rufe, anmelden, tabellen } = aufbau();
+  const s = anmelden('lager1', 'Passwort-Lager1');
+  k.speicher.protokoll = [{ zeit: '2026-10-07T08:00:00.000Z', benutzer: 'tobias', aktion: 'anmeldung', ergebnis: 'ok' }];
+  k.speicher.zwListe = [{ id: 'Z1', datum: '2026-10-07', retoureId: '241698', zwVarianteId: 'SIM-1', preis: 968.99, gebuchtVon: null, bestandGebucht: false, probelauf: true }];
+  const zl = rufe('zw-liste', { schluessel: s }).daten;
+  assert.deepEqual(zl.zwListe.map((z) => [z.id, z.zwVarianteId, z.preis, z.gebuchtVon, z.probelauf]), [['Z1', 'SIM-1', 968.99, '', true]], 'schon im selben Aufruf sichtbar');
+  assert.equal(k.speicher.protokoll, undefined);
+  assert.equal(k.speicher.zwListe, undefined);
+  assert.equal(tabellen.zwListe.length, 1);
+  assert.equal(tabellen.zwListe[0].zeileId, 'Z1');
+  assert.ok(tabellen.protokoll.some((p) => p.benutzer === 'tobias' && p.zustand === '' && p.preis === null), 'feste Spalten');
+  assert.equal(rufe('zw-liste', { schluessel: s }).daten.zwListe.length, 1, 'nicht doppelt');
+});
+
+test('Protokoll: jede Zeile hat genau die Spalten der Data Table', () => {
+  const { rufe, tabellen } = aufbau();
+  rufe('anmelden', { body: { benutzer: 'lager1', passwort: 'falsch' } });
+  assert.deepEqual(Object.keys(tabellen.protokoll[0]), ['zeit', 'benutzer', 'aktion', 'retoureId', 'positionId', 'zustand', 'preis', 'varianteId', 'ergebnis', 'meldung']);
+  assert.deepEqual([tabellen.protokoll[0].benutzer, tabellen.protokoll[0].ergebnis], ['lager1', 'fehlgeschlagen']);
+  assert.equal(rufe('zw-liste', {}).status, 401, 'ohne Anmeldung nichts lesen');
 });
 
 test('Trockenlauf: Bestand +1 auf vorhandenen ZW-Artikel, plenty bleibt unberührt', () => {
@@ -914,14 +1016,17 @@ test('TMP-Tabelle: Ergebnis landet im Protokoll und als Hinweis in der Antwort',
   const n = a.schreiben.length;
 
   const json = zwNachTmp(a, a.schreiben.map((_, i) => ({ id: i + 1 })), k.speicher, k.jetzt);
-  assert.deepEqual(Object.keys(json), ['status', 'contentType', 'body']);
+  assert.deepEqual(Object.keys(json), ['status', 'contentType', 'body', 'ablage']);
   assert.deepEqual(JSON.parse(json.body).tmp, { lauf: a.schreiben[0].lauf, zeilen: n, fehler: null });
-  const p = k.speicher.protokoll[k.speicher.protokoll.length - 1];
+  // Protokoll: Zeilen aus ZW-Logik bleiben vorn, die neue Zeile kommt dazu
+  assert.deepEqual(json.ablage.protokoll.slice(0, a.ablage.protokoll.length), a.ablage.protokoll);
+  const p = json.ablage.protokoll[json.ablage.protokoll.length - 1];
   assert.equal(p.aktion, 'tmp-tabelle'); assert.equal(p.ergebnis, 'geschrieben'); assert.equal(p.retoureId, '241881');
+  assert.equal(k.speicher.ablageAusgang, undefined, 'nichts bleibt im Speicher');
 
   const fehler = zwNachTmp(a, [{ error: { message: 'Data table ZW_TMP not found' } }], k.speicher, k.jetzt);
   assert.match(JSON.parse(fehler.body).tmp.fehler, /ZW_TMP not found/);
-  assert.equal(k.speicher.protokoll[k.speicher.protokoll.length - 1].ergebnis, 'fehler');
+  assert.equal(fehler.ablage.protokoll[fehler.ablage.protokoll.length - 1].ergebnis, 'fehler');
   assert.match(JSON.parse(zwNachTmp(a, [], k.speicher, k.jetzt).body).tmp.fehler, /nur 0 von/);
 
   rufe('retoure', { schluessel: s, query: { nr: '241900' } });

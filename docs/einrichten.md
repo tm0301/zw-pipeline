@@ -32,6 +32,18 @@ unter **Data tables** anlegen, mit diesen Spalten (Typ in Klammern):
 `lauf`, `nr` (Number), `zeit`, `aktion`, `retoureId`, `positionId`, `system`, `titel`, `method`, `endpoint`, `body`, `hinweis`, `platzhalter`, `status`.
 Alle ohne Angabe sind Text (String). Was in den Spalten steht: [tmp-tabelle.md](tmp-tabelle.md).
 
+## 2c. Protokoll und ZW-Liste: ZW_PROTOKOLL und ZW_LISTE
+
+Protokoll und ZW-Liste liegen in zwei Data Tables im selben Projekt (Bausteine **ZW-Liste lesen/schreiben**, **Protokoll lesen/schreiben**):
+
+- **ZW_PROTOKOLL:** `zeit`, `benutzer`, `aktion`, `retoureId`, `positionId`, `zustand`, `preis` (Number), `varianteId`, `ergebnis`, `meldung`
+- **ZW_LISTE:** `zeileId` (Schlüssel), `datum`, `retoureId`, `positionId`, `originalVarianteId`, `zwVarianteId`, `barcode`, `name`, `zustand`, `grund`,
+  `bilder` (Number), `preis` (Number), `empfehlung` (Number), `preisVomLager` (Boolean), `preisGrund`, `streichpreis` (Number), `neuOderPlus1`,
+  `freigegebenVon`, `probelauf` (Boolean), `bestandGebucht` (Boolean), `gebuchtVon`, `gebuchtAm`, `lauf`
+
+Alle ohne Angabe sind Text. Der erste echte Aufruf nach dem Update zieht Protokoll und ZW-Liste aus dem Speicher des Workflows einmalig in die Tabellen um.
+„Probelauf zurücksetzen“ ändert die Tabellen nicht. Probelauf-Zeilen erkennt man in ZW_LISTE an `probelauf = true` und `zwVarianteId = SIM-…`.
+
 ## 3. Veröffentlichen und Seite öffnen
 
 1. Oben rechts **Publish** (bzw. „Active“) einschalten.
@@ -63,6 +75,7 @@ Doppelklick auf **Einstellungen**:
 | `einstellungen.seitenAdresse` | leer lassen (nur nötig, falls die Links in den Mails falsch sind) |
 | `einstellungen.bueroAn` | E-Mail-Adresse des Büros für „Nicht verkaufbar“. Leer = geht an `freigabeAn` |
 | `einstellungen.statusNichtVerkaufbar` | Status, wenn eine Position nicht verkaufbar ist: 9.1.3 (Reklamieren) |
+| `einstellungen.shopwareBilderOrdner` | ID des Shopware-Medienordners „ZW-Retouren“ für die Bilder vom Lager. Leer = in ZW_TMP steht der Platzhalter ‹Ordner ZW-Retouren› |
 
 Danach **speichern und erneut Publish**, damit die Änderung gilt.
 
@@ -91,7 +104,10 @@ Eine Retoure öffnen und pro Artikel einen Zustand wählen: Die Vorschau rechnet
 - Nachgestellt: neue Varianten-ID (`SIM-1`, `SIM-2` …), Bestand +1, Kommentar in der Retoure, Status 9.3. In plenty und Shopware ändert sich nichts.
 - **TMP-Tabelle:** Alles, was im Echtbetrieb geschrieben würde, steht als Zeile in der Data Table ZW_TMP (ein Befehl pro Zeile).
   Die Freigabe-Seite nennt nach dem Freigeben die Anzahl der Zeilen. Das Protokoll in der ZW-Liste zeigt jeden Lauf („tmp-tabelle“).
-- Tab **ZW-Liste** (ersetzt die Excel-Liste): alle freigegebenen ZW-Artikel, Knopf **Bestand gebucht**, Suche, Filter, CSV-Export. Darunter das Protokoll.
+- Tab **ZW-Liste** (ersetzt die Excel-Liste): die neuesten 300 freigegebenen ZW-Artikel aus ZW_LISTE, Knopf **Bestand gebucht**, Suche, Filter,
+  CSV-Export. Darunter die neuesten 50 Einträge aus ZW_PROTOKOLL.
+- **Bilder vom Lager:** gehen als Anhang in die Mails. Bei einem neuen ZW-Artikel stehen in ZW_TMP zusätzlich die Befehle zum Hochladen
+  in Shopware (beim Anlegen) und zum Einsortieren als 2. Bild (nach der Freigabe). Abgelehnt → Befehle zum Löschen.
 - Fehler (z. B. Original fehlt in Shopware, Artikel ohne EAN, Mail nicht gesendet) als Kommentar. Die Position kann neu angelegt werden.
 - Admins können den Probelauf im Tab ZW-Liste zurücksetzen.
 
@@ -103,8 +119,9 @@ Eine Retoure öffnen und pro Artikel einen Zustand wählen: Die Vorschau rechnet
 
 ## Bekannte Grenzen des Probelaufs
 
-- Der Stand liegt im Speicher des Workflows (Static Data). n8n schreibt ihn erst am Ende jedes Laufs.
-  Laufen zwei Aktionen genau gleichzeitig, kann eine davon verloren gehen. Für den Echtbetrieb kommen ZW-Liste und Protokoll in eine n8n Data Table (Phase 6).
+- Offene Freigaben und Positionen liegen im Speicher des Workflows (Static Data). n8n schreibt ihn erst am Ende jedes Laufs.
+  Laufen zwei Aktionen genau gleichzeitig, kann eine davon verloren gehen. Protokoll und ZW-Liste liegen in Data Tables und sind davon nicht betroffen.
+- Data Tables haben in n8n zusammen ein Limit von 50 MB. Bilder liegen dort nicht.
 - Ein erneuter Import der JSON setzt den Probelauf zurück.
 - Testläufe direkt in n8n speichern nichts im Speicher des Workflows. Nur die Seite (Produktions-Adresse) merkt sich den Stand.
 - Der Shopware-Zugang gehört zu einem anderen n8n-Projekt. Fällt er weg, zeigt die Vorschau „Shopware meldet: …“.
