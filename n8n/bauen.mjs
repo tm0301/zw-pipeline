@@ -4,7 +4,7 @@
 // plenty und Shopware werden nur gelesen: über die vorhandenen Zugänge (PlentyONE-Baustein, HTTP-Baustein mit OAuth2).
 // Bitte nicht die JSON von Hand ändern, sondern die Quellen und dann neu bauen.
 
-import { readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
@@ -539,3 +539,13 @@ const workflow = {
 
 writeFileSync(join(wurzel, 'n8n/zw-pipeline-probelauf.json'), JSON.stringify(workflow, null, 2) + '\n');
 console.log('n8n/zw-pipeline-probelauf.json gebaut, Version ' + version + ', ' + nodes.length + ' Bausteine');
+
+// Jeder Code-Baustein zusätzlich als lesbare Datei: zum Review und zum Einfügen von Hand in n8n
+// (Baustein öffnen, ganzen Code markieren, Inhalt der Datei einfügen). Danach Prüfsumme über ?pruefen=version vergleichen.
+mkdirSync(join(wurzel, 'n8n/code'), { recursive: true });
+const pruefsummen = {};
+for (const n of nodes.filter((x) => x.parameters.jsCode)) {
+  writeFileSync(join(wurzel, 'n8n/code', n.name + '.js'), n.parameters.jsCode);
+  pruefsummen[n.name] = createHash('sha256').update(n.parameters.jsCode).digest('hex');
+}
+writeFileSync(join(wurzel, 'n8n/code/pruefsummen.json'), JSON.stringify(pruefsummen, null, 2) + '\n');

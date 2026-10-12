@@ -44,6 +44,16 @@ Protokoll und ZW-Liste liegen in zwei Data Tables im selben Projekt (Bausteine *
 Alle ohne Angabe sind Text. Der erste echte Aufruf nach dem Update zieht Protokoll und ZW-Liste aus dem Speicher des Workflows einmalig in die Tabellen um.
 „Probelauf zurücksetzen“ ändert die Tabellen nicht. Probelauf-Zeilen erkennt man in ZW_LISTE an `probelauf = true` und `zwVarianteId = SIM-…`.
 
+## 2d. Code-Baustein von Hand aktualisieren
+
+`npm run bauen` legt jeden Code-Baustein auch als Datei unter `n8n/code/` ab (z. B. `n8n/code/ZW-Logik.js`), dazu `pruefsummen.json`.
+Ist ein Baustein zu groß für ein Update per MCP (ZW-Logik, ca. 170 KB), so geht es von Hand:
+
+1. Auf GitHub die Datei öffnen, oben rechts **Raw**, alles markieren (Cmd+A) und kopieren (Cmd+C).
+2. In n8n den Baustein öffnen, in den Code klicken, alles markieren (Cmd+A) und einfügen (Cmd+V). Schließen und **Save**.
+3. Prüfen: `…/webhook/zw-station?pruefen=version` liefert `codeSha256` (ZW-Logik) und `bausteine` (alle anderen).
+   Die Werte müssen mit `n8n/code/pruefsummen.json` übereinstimmen.
+
 ## 3. Veröffentlichen und Seite öffnen
 
 1. Oben rechts **Publish** (bzw. „Active“) einschalten.
