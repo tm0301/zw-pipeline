@@ -770,9 +770,12 @@ test('Trockenlauf: neuer ZW-Artikel – Schreibbefehle für plenty und Shopware 
   assert.deepEqual(nach('Barcode').body, { barcodeId: 1, code: '4002516769965ZW1' });
   assert.deepEqual(plan.schritte.filter((x) => x.titel.startsWith('Verkaufspreis')).map((x) => x.body), [{ salesPriceId: 1, price: 1099 }], 'Preise mit 0 weglassen');
   assert.equal(nach('Lieferant').body.purchasePrice, 579.5);
-  assert.deepEqual(nach('Tags').body.map((x) => x.tagId), [97, 32]);
+  const tags = plan.schritte.filter((x) => x.titel.startsWith('Tag '));
+  assert.deepEqual(tags.map((x) => [x.method, x.endpoint, x.body.tagId, x.body.tagType]),
+    [['POST', '/rest/tags/relationships', 97, 'variation'], ['POST', '/rest/tags/relationships', 32, 'variation']], 'ein Aufruf pro Tag');
   assert.deepEqual(plan.schritte.filter((x) => x.titel.startsWith('Versandprofil')).map((x) => x.body.profileId), [9, 26]);
-  assert.deepEqual(nach('Eigenschaft 11').body.relationValues, [{ lang: '0', value: '13' }]);
+  assert.deepEqual(nach('Eigenschaft 11').body,
+    { propertyId: 11, relationTypeIdentifier: 'item', relationTargetId: '‹neue Varianten-ID›', selectionRelationId: 13 }, 'Auswahl über selectionRelationId');
   assert.ok(plan.hinweise.some((h) => /Einkaufspreis wie beim Original: Variante 644.11, Lieferant 579.5/.test(h)));
 
   const klon = nach('Original 772160 klonen');

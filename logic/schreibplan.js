@@ -60,6 +60,30 @@ function ohneLeere(obj) {
 
 // ---------- plenty: Kopie des Originals nachbauen ----------
 
+// Eigenschaft wie beim Original (plenty-Doku, geprüft 13.10.2026):
+// Auswahl → POST /rest/properties/relations mit selectionRelationId (= ID der Auswahl).
+// Andere Arten → Relation anlegen, danach je Wert POST /rest/properties/relations/values.
+// Die Art (cast) steht nicht immer in den gelesenen Daten. Ohne cast gilt ein einzelner Zahlenwert ohne Sprache ('0') als Auswahl.
+function istAuswahl(x) {
+  const cast = (x.propertyRelation || x.property || {}).cast || x.cast;
+  if (cast) return cast === 'selection';
+  const werte = x.relationValues || [];
+  return werte.length === 1 && String(werte[0].lang) === '0' && /^\d+$/.test(String(werte[0].value));
+}
+
+function eigenschaftBefehle(x) {
+  const titel = 'Eigenschaft ' + x.propertyId + ' wie Original';
+  const basis = { propertyId: x.propertyId, relationTypeIdentifier: x.relationTypeIdentifier || 'item', relationTargetId: NEU_VARIANTE };
+  if (istAuswahl(x)) {
+    return [befehl('plenty', titel, 'POST', '/rest/properties/relations',
+      Object.assign(basis, { selectionRelationId: Number(x.relationValues[0].value) }))];
+  }
+  const relation = '‹Relation-ID Eigenschaft ' + x.propertyId + '›';
+  return [befehl('plenty', titel, 'POST', '/rest/properties/relations', basis, 'Antwort liefert ' + relation + '.')]
+    .concat((x.relationValues || []).map((r) => befehl('plenty', titel + ': Wert (' + r.lang + ')', 'POST', '/rest/properties/relations/values',
+      { propertyRelationId: relation, lang: String(r.lang), value: String(r.value) })));
+}
+
 function plentyNeu(v, p, hinweise) {
   const va = p.variante;
   const art = p.artikel || {};
@@ -123,21 +147,19 @@ function plentyNeu(v, p, hinweise) {
     schritte.push(befehl('plenty', 'Standardkategorie', 'POST', pfad + '/variation_default_categories', { branchId: x.branchId, plentyId: x.plentyId }));
   }
 
+  // Tags: ein Aufruf pro Tag (plenty-Doku: POST /rest/tags/relationships, geprüft 13.10.2026)
   const tagIds = [...new Set((va.tags || []).map((t) => Number(t.tagId)).concat([PLENTY_ZW.tagBWare]))];
-  schritte.push(befehl('plenty', 'Tags wie Original + B-Ware', 'POST', '/rest/tags/relations',
-    tagIds.map((tagId) => ({ tagId, tagType: 'variation', relationshipValue: NEU_VARIANTE }))));
+  for (const tagId of tagIds) {
+    schritte.push(befehl('plenty', 'Tag ' + tagId + (tagId === PLENTY_ZW.tagBWare ? ' (B-Ware)' : ' wie Original'), 'POST', '/rest/tags/relationships',
+      { tagId, tagType: 'variation', relationshipValue: NEU_VARIANTE }));
+  }
 
   for (const x of p.versandprofile || []) {
     schritte.push(befehl('plenty', 'Versandprofil ' + x.profileId, 'POST', '/rest/items/' + NEU_ARTIKEL + '/item_shipping_profiles', { profileId: x.profileId }));
   }
   if (!(p.versandprofile || []).length) hinweise.push('plenty: Original hat keine Versandprofile.');
 
-  for (const x of va.properties || []) {
-    schritte.push(befehl('plenty', 'Eigenschaft ' + x.propertyId + ' wie Original', 'POST', '/rest/properties/relations', {
-      propertyId: x.propertyId, relationTypeIdentifier: x.relationTypeIdentifier, relationTargetId: NEU_VARIANTE,
-      relationValues: (x.relationValues || []).map((r) => ohneLeere({ lang: r.lang, value: r.value, description: r.description })),
-    }));
-  }
+  for (const x of va.properties || []) schritte.push(...eigenschaftBefehle(x));
 
   // Einkaufspreis: wie beim Original, in der Variante und beim Lieferanten (entschieden 12.10.2026)
   if (Number(va.purchasePrice) !== Number(((va.variationSuppliers || [])[0] || {}).purchasePrice)) {
