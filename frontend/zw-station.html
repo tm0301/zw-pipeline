@@ -609,7 +609,7 @@ details.panel > summary { cursor: pointer; padding: 12px 0; font-weight: 600; }
 
   function bilderHtml(pos) {
     var liste = zustand.bilder[pos] || [], laden = zustand.bilderLaden[pos] || 0;
-    var h = '<div class="eingabe-bilder"><span><b>Bilder</b> (freiwillig, bis ' + BILDER_MAX + ')</span> <small class="hint">Geht mit dem Grund als Anhang in die Mail.</small><div class="bilder">' +
+    var h = '<div class="eingabe-bilder"><span><b>Bilder</b> (freiwillig, bis ' + BILDER_MAX + ')</span> <small class="hint">Geht als Anhang in die Mail. Bei einem neuen ZW-Artikel nach der Freigabe als 2. Bild in Shopware.</small><div class="bilder">' +
       liste.map(function (b, i) {
         return '<figure><img src="' + esc(b.daten) + '" alt="Bild ' + (i + 1) + '"><button type="button" data-bild-weg="' + esc(pos) + '" data-i="' + i + '" aria-label="Bild ' + (i + 1) + ' entfernen">×</button></figure>';
       }).join('');

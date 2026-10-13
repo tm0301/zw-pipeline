@@ -11,6 +11,10 @@ Projektseite (verbindlich): Notion „Projekt: ZW-Pipeline (Zweite-Wahl-Artikel 
 Preise und Mindestpreise aus Shopware. Anmeldung, Vorschau, Freigabe-Mail, ZW-Liste und Protokoll laufen echt in n8n.
 Anlegen in plenty und Shopware wird nur nachgestellt (IDs `SIM-…`). Einrichten: [docs/einrichten.md](docs/einrichten.md).
 
+**TMP-Tabelle statt Schreiben.** Alle Schreibbefehle (plenty-Kopie, Shopware-Klon, Bestand +1, Kommentare, Status) landen als Zeilen
+in der n8n Data Table `ZW_TMP`. Die IT ersetzt den Baustein „TMP-Tabelle schreiben“ später durch die echten Schreib-Bausteine:
+[docs/tmp-tabelle.md](docs/tmp-tabelle.md).
+
 ## Aufbau
 
 ```
@@ -19,6 +23,7 @@ n8n/bauen.mjs                    baut die Import-Datei aus logic/ und frontend/
 logic/zw-logik.js                Preisregel, Barcode, Nummern, Kommentartexte
 logic/anmeldung.js               Passwort-Hash prüfen, Schlüssel ausstellen (reines JavaScript)
 logic/quellen.js                 Abfragen an plenty und Shopware planen und Antworten auslesen (nur lesend)
+logic/schreibplan.js             Schreibbefehle für plenty und Shopware bauen (Trockenlauf, TMP-Tabelle)
 logic/ablauf.js                  alle Aktionen der Seite (Retouren, Vorschau, Anlegen, Freigabe, ZW-Liste)
 frontend/zw-station.html         die Seite für das Lager, ausgeliefert von n8n
 docs/                            Anleitungen
@@ -31,12 +36,13 @@ Seite, `anmelden`, `retouren`, `retoure`, `vorschau`, `anlegen`, `zw-liste`, `zw
 Webhook → Einstellungen → Vorbereiten → Daten nötig?
    ja:   plenty A → Runde B planen → plenty B → Shopware lesen → ZW-Logik
    nein: ZW-Logik
-ZW-Logik → Mails da? → Freigabe-Mail senden → Mailergebnis → Antwort senden
+ZW-Logik → Mails da? → Freigabe-Mail senden → Mailergebnis → Schreibbefehle da?
+Schreibbefehle da? → Schreibbefehle aufteilen → TMP-Tabelle schreiben (Data Table ZW_TMP) → TMP-Ergebnis → Antwort senden
 ```
 
 „Vorbereiten“ prüft die Anmeldung und plant die Abfragen. Ohne gültige Anmeldung wird nichts abgefragt.
 plenty läuft über den PlentyONE-Baustein (mehrere GET-Abfragen auf einmal), Shopware über eine Produktsuche.
-Die Antwort geht erst nach dem Mailversand raus, weil n8n den Stand am Ende jedes Laufs speichert.
+Die Antwort geht erst nach Mailversand und TMP-Tabelle raus, weil n8n den Stand am Ende jedes Laufs speichert.
 
 Testlauf direkt in n8n (ohne Webhook-Adresse): Die Aktion steht dann in `body.aktion`, z. B. `{"aktion":"retouren"}`.
 

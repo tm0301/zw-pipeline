@@ -4,12 +4,14 @@
 // plenty und Shopware werden nur gelesen: über die vorhandenen Zugänge (PlentyONE-Baustein, HTTP-Baustein mit OAuth2).
 // Bitte nicht die JSON von Hand ändern, sondern die Quellen und dann neu bauen.
 
-import { readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const wurzel = join(dirname(fileURLToPath(import.meta.url)), '..');
+const { PROTOKOLL_SPALTEN, ZW_LISTE_SPALTEN, ZAHL_SPALTEN, JA_NEIN_SPALTEN } = createRequire(import.meta.url)('../logic/ablauf.js');
 const lies = (p) => readFileSync(join(wurzel, p), 'utf8');
 
 // Teile, die nur für Node gedacht sind (require/module.exports), entfernen
@@ -87,6 +89,12 @@ const codeRundeB = mitKopf(nurNoetig(['zwRundeB']) + '\n' +
   'const plan = $(\'Vorbereiten\').first().json.plan;\n' +
   'return [{ json: { plenty: zwRundeB(plan, $input.all().map((i) => i.json)) } }];\n');
 
+// Alle Code-Bausteine außer ZW-Logik selbst. Ihre Prüfsummen liefert …/webhook/zw-station?pruefen=version.
+const CODE_BAUSTEINE = [
+  'Vorbereiten', 'Runde B planen', 'Freigabe-Mails aufteilen', 'Mailergebnis', 'Schreibbefehle aufteilen', 'TMP-Ergebnis',
+  'Ablage', 'Protokoll aufteilen', 'ZW-Liste aufteilen',
+];
+
 const codeLogik = mitKopf(
   '// Die Seite der ZW-Station als Rohtext (Quelle: frontend/zw-station.html)\n' +
   'const SEITE_HTML = String.raw`' + seite + '`;\n\n' +
@@ -97,6 +105,7 @@ const codeLogik = mitKopf(
   'function geholteDaten() {\n' +
   '  let v;\n' +
   '  try { v = $(\'Vorbereiten\').first().json; } catch (err) { return null; }\n' +
+  '  if (v && v.weiter === \'tabellen\') return { plan: v.plan, zwListe: ausgabe(\'ZW-Liste lesen\') || [], protokoll: ausgabe(\'Protokoll lesen\') || [] };\n' +
   '  if (!v || v.weiter !== \'daten\') return null;\n' +
   '  const sw = ausgabe(\'Shopware lesen\');\n' +
   '  return { plan: v.plan, a: ausgabe(\'plenty A\') || [], b: ausgabe(\'plenty B\') || [], shopware: sw && sw[0] ? sw[0] : null };\n' +
@@ -106,6 +115,9 @@ const codeLogik = mitKopf(
   '  einstellungen: anfrage.einstellungen || {}, speicher: $getWorkflowStaticData(\'global\'), jetzt: Date.now(),\n' +
   '  seiteHtml: SEITE_HTML, daten: geholteDaten(),\n' +
   '  eigenerCode: () => { try { return $(\'ZW-Logik\').params.jsCode; } catch (err) { return null; } },\n' +
+  '  alleCodes: () => Object.fromEntries([' + CODE_BAUSTEINE.map((n) => '\'' + n + '\'').join(', ') + '].map((n) => {\n' +
+  '    try { return [n, $(n).params.jsCode]; } catch (err) { return [n, null]; }\n' +
+  '  })),\n' +
   '});\n' +
   'return [{ json: antwort }];\n');
 
@@ -129,6 +141,47 @@ const codeMailergebnis = mitKopf(nurNoetig(['zwNachMailversand']) + '\n' +
   '  Date.now(),\n' +
   ');\n' +
   'return [{ json: antwort }];\n');
+
+// TMP-Tabelle: Statt in plenty und Shopware zu schreiben, landen alle Schreibbefehle als Zeilen in der Data Table ZW_TMP.
+// Die IT ersetzt später „TMP-Tabelle schreiben“ durch die echten Schreib-Bausteine (siehe docs/tmp-tabelle.md).
+const TMP_TABELLE = 'ZW_TMP';
+const TMP_SPALTEN = [
+  ['lauf', 'string'], ['nr', 'number'], ['zeit', 'string'], ['aktion', 'string'], ['retoureId', 'string'], ['positionId', 'string'],
+  ['system', 'string'], ['titel', 'string'], ['method', 'string'], ['endpoint', 'string'], ['body', 'string'], ['hinweis', 'string'],
+  ['platzhalter', 'string'], ['status', 'string'],
+];
+
+const codeSchreibbefehleAufteilen = mitKopf(
+  '// Eine Zeile pro Schreibbefehl, in der Reihenfolge von nr. Die Felder sind die Spalten der Data Table ' + TMP_TABELLE + '.\n' +
+  '// Bilder vom Lager (Befehl „hochladen“) hängen als binary „datei“ am Item. In der Tabelle steht dafür ‹Bilddatei›.\n' +
+  'return ($input.first().json.schreiben || []).map((zeile) => {\n' +
+  '  const { datei, ...json } = zeile;\n' +
+  '  if (!datei || !datei.daten) return { json };\n' +
+  '  return { json, binary: { datei: { data: datei.daten, mimeType: datei.mimeType, fileName: datei.name } } };\n' +
+  '});\n');
+
+const codeTmpErgebnis = mitKopf(nurNoetig(['zwNachTmp']) + '\n' +
+  '// Ergebnis von „TMP-Tabelle schreiben“ ins Protokoll, Hinweis in die Antwort. Danach antwortet „Antwort senden“.\n' +
+  'const antwort = zwNachTmp(\n' +
+  '  $(\'Schreibbefehle da?\').first().json,\n' +
+  '  $input.all().map((item) => item.json),\n' +
+  '  $getWorkflowStaticData(\'global\'),\n' +
+  '  Date.now(),\n' +
+  ');\n' +
+  'return [{ json: antwort }];\n');
+
+// Protokoll und ZW-Liste: Data Tables ZW_PROTOKOLL und ZW_LISTE (Spalten wie in logic/ablauf.js)
+const PROTOKOLL_TABELLE = 'ZW_PROTOKOLL';
+const ZW_LISTE_TABELLE = 'ZW_LISTE';
+const spaltenTyp = (name) => (ZAHL_SPALTEN.includes(name) ? 'number' : (JA_NEIN_SPALTEN.includes(name) ? 'boolean' : 'string'));
+
+// Alles, was nach ZW-Logik, Mails und TMP-Tabelle an die Seite geht. Die Bausteine danach lesen von hier.
+const codeAblage = mitKopf(
+  '// Antwort an die Seite, dazu neue Zeilen für ZW_PROTOKOLL und ZW_LISTE (ablage). Kommt von „TMP-Ergebnis“ oder „Schreibbefehle da?“.\n' +
+  'return [{ json: $input.first().json }];\n');
+const codeAufteilen = (feld, tabelle) => mitKopf(
+  '// Eine Zeile pro Eintrag für die Data Table ' + tabelle + '.\n' +
+  'return (($(\'Ablage\').first().json.ablage || {}).' + feld + ' || []).map((zeile) => ({ json: zeile }));\n');
 
 // Feste IDs, damit ein erneuter Import dieselben Bausteine ergibt
 const id = (name) => {
@@ -165,6 +218,7 @@ const EINSTELLUNGEN = [
   ['seitenAdresse', 'string', ''],
   ['bueroAn', 'string', ''],
   ['statusNichtVerkaufbar', 'string', '9.1.3'],
+  ['shopwareBilderOrdner', 'string', ''],
 ];
 
 const nodes = [];
@@ -232,7 +286,46 @@ nodes.push({
   position: [740, mitte],
 });
 verbinde('Daten nötig?', 'plenty A', 0);
-verbinde('Daten nötig?', 'ZW-Logik', 1);
+verbinde('Daten nötig?', 'Tabellen nötig?', 1);
+
+const wenn = (name, ausdruck, position) => nodes.push({
+  parameters: {
+    conditions: {
+      options: { caseSensitive: true, leftValue: '', typeValidation: 'strict' },
+      conditions: [{
+        id: id('bedingung|' + name),
+        leftValue: '={{ ' + ausdruck + ' }}',
+        rightValue: '',
+        operator: { type: 'boolean', operation: 'true', singleValue: true },
+      }],
+      combinator: 'and',
+    },
+    options: {},
+  },
+  id: id(name), name, type: 'n8n-nodes-base.if', typeVersion: 2, position,
+});
+const tabelle = (name) => ({ __rl: true, mode: 'name', value: name });
+const spaltenSchema = (spalten) => spalten.map((name) => ({
+  id: name, displayName: name, required: false, defaultMatch: false, display: true, type: spaltenTyp(name), canBeUsedToMatch: true,
+}));
+const lesen = (name, tabellenName, limit, position) => nodes.push({
+  parameters: {
+    resource: 'row', operation: 'get', dataTableId: tabelle(tabellenName),
+    returnAll: false, limit, orderBy: true, orderByColumn: 'createdAt', orderByDirection: 'DESC',
+  },
+  id: id(name), name, type: 'n8n-nodes-base.dataTable', typeVersion: 1.1, position,
+  alwaysOutputData: true, executeOnce: true,
+  notes: 'Nur lesen: die neuesten ' + limit + ' Zeilen.', notesInFlow: true,
+});
+
+// ZW-Liste und Protokoll lesen (nur für die Aktionen zw-liste und zw-liste-buchen)
+wenn('Tabellen nötig?', '$json.weiter === \'tabellen\'', [960, mitte + 220]);
+verbinde('Tabellen nötig?', 'ZW-Liste lesen', 0);
+verbinde('Tabellen nötig?', 'ZW-Logik', 1);
+lesen('ZW-Liste lesen', ZW_LISTE_TABELLE, 300, [1180, mitte + 220]);
+verbinde('ZW-Liste lesen', 'Protokoll lesen');
+lesen('Protokoll lesen', PROTOKOLL_TABELLE, 50, [1400, mitte + 220]);
+verbinde('Protokoll lesen', 'ZW-Logik');
 
 plenty('plenty A', [960, mitte - 220]);
 verbinde('plenty A', 'Runde B planen');
@@ -282,7 +375,7 @@ nodes.push({
   position: [2060, mitte],
 });
 verbinde('Mails da?', 'Freigabe-Mails aufteilen', 0);
-verbinde('Mails da?', 'Antwort senden', 1);
+verbinde('Mails da?', 'Schreibbefehle da?', 1);
 
 nodes.push({
   parameters: { jsCode: codeMailsAufteilen },
@@ -311,17 +404,116 @@ nodes.push({
   id: id('Mailergebnis'), name: 'Mailergebnis', type: 'n8n-nodes-base.code', typeVersion: 2,
   position: [2720, mitte - 160],
 });
-verbinde('Mailergebnis', 'Antwort senden');
+verbinde('Mailergebnis', 'Schreibbefehle da?');
+
+// Schreibbefehle (plenty, Shopware, Kommentare, Status) in die TMP-Tabelle statt in die Systeme
+nodes.push({
+  parameters: {
+    conditions: {
+      options: { caseSensitive: true, leftValue: '', typeValidation: 'strict' },
+      conditions: [{
+        id: id('bedingung|schreiben'),
+        leftValue: '={{ ($json.schreiben || []).length > 0 }}',
+        rightValue: '',
+        operator: { type: 'boolean', operation: 'true', singleValue: true },
+      }],
+      combinator: 'and',
+    },
+    options: {},
+  },
+  id: id('Schreibbefehle da?'), name: 'Schreibbefehle da?', type: 'n8n-nodes-base.if', typeVersion: 2,
+  position: [2940, mitte],
+});
+verbinde('Schreibbefehle da?', 'Schreibbefehle aufteilen', 0);
+verbinde('Schreibbefehle da?', 'Ablage', 1);
+
+nodes.push({
+  parameters: { jsCode: codeSchreibbefehleAufteilen },
+  id: id('Schreibbefehle aufteilen'), name: 'Schreibbefehle aufteilen', type: 'n8n-nodes-base.code', typeVersion: 2,
+  position: [3160, mitte - 160],
+});
+verbinde('Schreibbefehle aufteilen', 'TMP-Tabelle schreiben');
 
 nodes.push({
   parameters: {
+    resource: 'row',
+    operation: 'insert',
+    dataTableId: { __rl: true, mode: 'name', value: TMP_TABELLE },
+    columns: {
+      mappingMode: 'autoMapInputData',
+      value: {},
+      matchingColumns: [],
+      schema: TMP_SPALTEN.map(([name, type]) => ({
+        id: name, displayName: name, required: false, defaultMatch: false, display: true, type, canBeUsedToMatch: true,
+      })),
+    },
+    options: {},
+  },
+  id: id('TMP-Tabelle schreiben'), name: 'TMP-Tabelle schreiben', type: 'n8n-nodes-base.dataTable', typeVersion: 1.1,
+  position: [3380, mitte - 160], onError: 'continueRegularOutput', alwaysOutputData: true,
+  notes: 'Platzhalter für die IT: hier kommen später die echten Schreib-Bausteine für plenty und Shopware hin. ' +
+    'Eine Zeile = ein Befehl, je lauf in der Reihenfolge von nr. Zeilen mit system = info überspringen. Siehe docs/tmp-tabelle.md.',
+  notesInFlow: true,
+});
+verbinde('TMP-Tabelle schreiben', 'TMP-Ergebnis');
+
+nodes.push({
+  parameters: { jsCode: codeTmpErgebnis },
+  id: id('TMP-Ergebnis'), name: 'TMP-Ergebnis', type: 'n8n-nodes-base.code', typeVersion: 2,
+  position: [3600, mitte - 160],
+});
+verbinde('TMP-Ergebnis', 'Ablage');
+
+// Protokoll und ZW-Liste in die Data Tables. Das Protokoll darf scheitern (die Arbeit geht weiter),
+// die ZW-Liste nicht: Scheitert sie, bricht der Lauf ab und die Seite zeigt einen Fehler.
+code('Ablage', codeAblage, [3820, mitte]);
+verbinde('Ablage', 'Protokoll da?');
+wenn('Protokoll da?', '(($(\'Ablage\').first().json.ablage || {}).protokoll || []).length > 0', [4040, mitte]);
+verbinde('Protokoll da?', 'Protokoll aufteilen', 0);
+verbinde('Protokoll da?', 'ZW-Liste da?', 1);
+code('Protokoll aufteilen', codeAufteilen('protokoll', PROTOKOLL_TABELLE), [4260, mitte - 160]);
+verbinde('Protokoll aufteilen', 'Protokoll schreiben');
+nodes.push({
+  parameters: {
+    resource: 'row', operation: 'insert', dataTableId: tabelle(PROTOKOLL_TABELLE),
+    columns: { mappingMode: 'autoMapInputData', value: {}, matchingColumns: [], schema: spaltenSchema(PROTOKOLL_SPALTEN) },
+    options: {},
+  },
+  id: id('Protokoll schreiben'), name: 'Protokoll schreiben', type: 'n8n-nodes-base.dataTable', typeVersion: 1.1,
+  position: [4480, mitte - 160], onError: 'continueRegularOutput', alwaysOutputData: true,
+  notes: 'Neue Zeilen in ZW_PROTOKOLL. Ein Fehler hier hält die ZW-Station nicht auf.', notesInFlow: true,
+});
+verbinde('Protokoll schreiben', 'ZW-Liste da?');
+wenn('ZW-Liste da?', '(($(\'Ablage\').first().json.ablage || {}).zwListe || []).length > 0', [4700, mitte]);
+verbinde('ZW-Liste da?', 'ZW-Liste aufteilen', 0);
+verbinde('ZW-Liste da?', 'Antwort senden', 1);
+code('ZW-Liste aufteilen', codeAufteilen('zwListe', ZW_LISTE_TABELLE), [4920, mitte - 160]);
+verbinde('ZW-Liste aufteilen', 'ZW-Liste schreiben');
+nodes.push({
+  parameters: {
+    resource: 'row', operation: 'upsert', dataTableId: tabelle(ZW_LISTE_TABELLE),
+    matchType: 'allConditions',
+    filters: { conditions: [{ keyName: 'zeileId', condition: 'eq', keyValue: '={{ $json.zeileId }}' }] },
+    columns: { mappingMode: 'autoMapInputData', value: {}, matchingColumns: [], schema: spaltenSchema(ZW_LISTE_SPALTEN) },
+    options: {},
+  },
+  id: id('ZW-Liste schreiben'), name: 'ZW-Liste schreiben', type: 'n8n-nodes-base.dataTable', typeVersion: 1.1,
+  position: [5140, mitte - 160],
+  notes: 'Neue oder geänderte Zeilen in ZW_LISTE (Schlüssel zeileId).', notesInFlow: true,
+});
+verbinde('ZW-Liste schreiben', 'Antwort senden');
+
+// Antwort an die Seite: immer die von „Ablage“, egal welcher Weg davor lief
+const ANTWORT = '$(\'Ablage\').first().json';
+nodes.push({
+  parameters: {
     respondWith: 'text',
-    responseBody: '={{ $json.body }}',
+    responseBody: '={{ ' + ANTWORT + '.body }}',
     options: {
-      responseCode: '={{ $json.status }}',
+      responseCode: '={{ ' + ANTWORT + '.status }}',
       responseHeaders: {
         entries: [
-          { name: 'Content-Type', value: '={{ $json.contentType }}' },
+          { name: 'Content-Type', value: '={{ ' + ANTWORT + '.contentType }}' },
           { name: 'Cache-Control', value: 'no-store' },
           { name: 'X-Robots-Tag', value: 'noindex' },
           { name: 'X-Frame-Options', value: 'DENY' },
@@ -331,7 +523,7 @@ nodes.push({
     },
   },
   id: id('Antwort senden'), name: 'Antwort senden', type: 'n8n-nodes-base.respondToWebhook', typeVersion: 1.1,
-  position: [2940, mitte],
+  position: [5360, mitte], executeOnce: true,
 });
 
 const workflow = {
@@ -347,3 +539,13 @@ const workflow = {
 
 writeFileSync(join(wurzel, 'n8n/zw-pipeline-probelauf.json'), JSON.stringify(workflow, null, 2) + '\n');
 console.log('n8n/zw-pipeline-probelauf.json gebaut, Version ' + version + ', ' + nodes.length + ' Bausteine');
+
+// Jeder Code-Baustein zusätzlich als lesbare Datei: zum Review und zum Einfügen von Hand in n8n
+// (Baustein öffnen, ganzen Code markieren, Inhalt der Datei einfügen). Danach Prüfsumme über ?pruefen=version vergleichen.
+mkdirSync(join(wurzel, 'n8n/code'), { recursive: true });
+const pruefsummen = {};
+for (const n of nodes.filter((x) => x.parameters.jsCode)) {
+  writeFileSync(join(wurzel, 'n8n/code', n.name + '.js'), n.parameters.jsCode);
+  pruefsummen[n.name] = createHash('sha256').update(n.parameters.jsCode).digest('hex');
+}
+writeFileSync(join(wurzel, 'n8n/code/pruefsummen.json'), JSON.stringify(pruefsummen, null, 2) + '\n');
